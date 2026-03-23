@@ -99,7 +99,7 @@ cp .env.example .env
 
 ```env
 # Qdrant Configuration
-QDRANT_URL=https://qdrant.geekscodebase.me
+QDRANT_URL=https://localhost:6333
 QDRANT_API_KEY=your_qdrant_api_key_here
 DEFAULT_TOP_K_MEMORY_QUERY=3
 
