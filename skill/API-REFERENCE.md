@@ -134,12 +134,12 @@ Edges are stored in the same collection as ordinary points with `type = "knowled
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project_name` | string | yes | Project name |
-| `op` | enum | yes | `export`, `import` or `summarize` |
+| `op` | enum | yes | `export`, `import`, `summarize` or `delete_collection` |
 | `memory_types` | enum[] | no | `op=export`: types to include; defaults to the structured contexts, decisions and progress |
 | `markdown` | string | `op=import` | Markdown in this server's own export format |
 | `content` | string | `op=summarize` | Text to condense |
 
-`export` returns the memory bank as a markdown string. `import` returns `{ imported, errors, timestamp }` and only accepts the format `export` produces. `summarize` returns the condensed text and uses the configured `SUMMARIZER_PROVIDER`, so it needs that provider's API key.
+`export` returns the memory bank as a markdown string. `import` returns `{ imported, errors, timestamp }` and only accepts the format `export` produces. `summarize` returns the condensed text and uses the configured `SUMMARIZER_PROVIDER`, so it needs that provider's API key. `delete_collection` permanently deletes the entire memory bank (collection and all points) for `project_name` and returns `{ deleted: true }` - irreversible, no other params.
 
 ---
 

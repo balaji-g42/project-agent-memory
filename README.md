@@ -1,11 +1,11 @@
 # Project Agent Memory
 
-A TypeScript MCP (Model Context Protocol) server that gives a coding agent persistent project memory - context, decisions, progress and patterns - backed by Qdrant or PostgreSQL/pgvector, selected with one environment variable.
+A TypeScript MCP (Model Context Protocol) server that gives a coding agent persistent project memory - context, decisions, progress and patterns - backed by Qdrant or PostgreSQL/pgvector (via pREST), selected with one environment variable.
 
 ## Features
 
 - **7 MCP tools**: `memory_create`, `memory_read`, `memory_update`, `memory_delete`, `memory_context`, `memory_graph`, `memory_admin`
-- **Dual storage backend**: `MEMORY_BACKEND=qdrant` (default) or `MEMORY_BACKEND=postgres`, same tool surface either way - no code change to switch, and Qdrant deployments need no env changes to keep working
+- **Dual storage backend**: `MEMORY_BACKEND=qdrant` (default) or `MEMORY_BACKEND=postgres`, same tool surface either way - no code change to switch, and Qdrant deployments need no env changes to keep working. The `postgres` backend talks to Postgres/pgvector through a [pREST](https://prest.dev) instance, not a direct DB connection - vectors travel over an `X-Vector` header (registered pREST queries can't carry them as URL params without hitting HTTP 414)
 - **Local embeddings by default**: ONNX CPU inference in-process via `@huggingface/transformers`; no embedding service, no API key, nothing leaves the machine except the backend writes
 - **Configurable vector dimension**: `VECTOR_DIM` (default 768), Matryoshka-truncated and re-normalized
 - **Pluggable providers**: `onnx`, `openai` (any OpenAI-compatible endpoint - Ollama, LM Studio, vLLM, LiteLLM, OpenAI itself), `gemini`, `openrouter`
@@ -16,7 +16,7 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 ## Requirements
 
 - Node.js 18+
-- A reachable Qdrant instance, **or** a PostgreSQL instance with the `vector` (pgvector) extension available
+- A reachable Qdrant instance, **or** a PostgreSQL instance with the `vector` (pgvector) extension **and** a [pREST](https://prest.dev) instance in front of it
 - No API key with the default `onnx` provider
 
 ## Install
@@ -97,21 +97,45 @@ QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=
 ```
 
-#### PostgreSQL / pgvector
+#### PostgreSQL / pgvector (via pREST)
 
-Any Postgres with the `vector` extension available. Example, local Docker:
+`MEMORY_BACKEND=postgres` doesn't connect to Postgres directly - it goes through [pREST](https://prest.dev), which exposes registered SQL queries over HTTP. You need both Postgres (with `vector`) and pREST reachable:
 
-```bash
-docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres -v ./pg_data:/var/lib/postgresql/data pgvector/pgvector:pg17
+```yaml
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: memory
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  prest:
+    image: prest/prest
+    environment:
+      PREST_PG_HOST: postgres
+      PREST_PG_USER: postgres
+      PREST_PG_PASS: postgres
+      PREST_PG_DATABASE: memory
+      PREST_JWT_KEY: change-me
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
 ```
 
 ```env
 MEMORY_BACKEND=postgres
-POSTGRES_URL=postgresql://postgres@localhost:5432/memory
-POSTGRES_PASSWORD=postgres
+PREST_URL=http://localhost:3000
+PREST_JWT_KEY=change-me
+PREST_REGISTER_ADMIN=admin
+PREST_DATABASE=memory
 ```
 
-The `vector` extension and both tables (`memory_collections`, `memory_points`) are created automatically on first connect - no manual migration step. See [`instructions/migration_plan.md/plan.md`](instructions/migration_plan.md/plan.md) §4 for the schema and design notes. If you have existing data in Qdrant and want to move it into Postgres, see [Migrating Qdrant data into Postgres](#migrating-qdrant-data-into-postgres) below.
+The `vector` extension, both tables (`memory_collections`, `memory_points`) and the registered pREST queries the server calls are created automatically on first connect - no manual migration step. `PREST_JWT_KEY` must match the key pREST's own config was started with (used to sign the admin bearer token for registered-query calls). See [`instructions/migration_plan.md/plan.md`](instructions/migration_plan.md/plan.md) §4 for the schema and design notes. If you have existing data in Qdrant and want to move it into Postgres, see [Migrating Qdrant data into Postgres](#migrating-qdrant-data-into-postgres) below.
 
 ### 2. Configuration
 
@@ -129,6 +153,12 @@ POOL_SIZE=10
 
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=
+
+# postgres backend only
+PREST_URL=http://localhost:3000
+PREST_JWT_KEY=
+PREST_REGISTER_ADMIN=admin
+PREST_DATABASE=memory
 
 VECTOR_DIM=768
 DISTANCE_METRIC=Cosine
@@ -194,6 +224,7 @@ Edges are stored in the same collection as ordinary points of type `knowledgeLin
 - `export` - optional `memory_types`. Returns the memory bank as markdown.
 - `import` - `markdown` in this server's own export format. Returns `{ imported, errors, timestamp }`.
 - `summarize` - `content`. Returns a condensed version, for shrinking a long text before storing it.
+- `delete_collection` - permanently deletes the entire memory bank (collection and all its points) for `project_name`. No confirmation step - irreversible.
 
 Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-REFERENCE.md).
 
@@ -203,12 +234,13 @@ v3.0 condenses the 35 v2 tools into these 7; the per-tool mapping is in [`skill/
 
 ### Migrating Qdrant data into Postgres
 
-`skill/migrate-qdrant-to-pgvector.mjs` is a one-time, one-way copy of every point in a Qdrant collection into the Postgres backend's schema. It's only needed if you have existing Qdrant data and want to start using `MEMORY_BACKEND=postgres` with it - the two backends are otherwise independent and nothing else moves data between them.
+`skill/migrate-qdrant-to-pgvector.mjs` is a one-time, one-way copy of every point in a Qdrant collection into the Postgres backend's schema, through the same pREST endpoint the server itself uses. It's only needed if you have existing Qdrant data and want to start using `MEMORY_BACKEND=postgres` with it - the two backends are otherwise independent and nothing else moves data between them.
 
 ```bash
 node skill/migrate-qdrant-to-pgvector.mjs --project project-agent-memory \
   --qdrant-url http://localhost:6333 \
-  --postgres-url postgresql://postgres@localhost:5432/memory
+  --prest-url http://localhost:3000 \
+  --prest-jwt-key change-me
 ```
 
 Source vectors of any dimension are supported: if the Qdrant collection's vector size differs from the target `VECTOR_DIM`, the script truncates and re-normalizes (Matryoshka-style, same as the embedding layer) when the source is larger, and refuses with a clear error rather than padding when the source is smaller. Run with `--help` for the full flag list, including `--dry-run`.

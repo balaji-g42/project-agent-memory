@@ -8,7 +8,7 @@ Runs via `npx` - no global install, no long-running service:
 npx -y project-agent-memory
 ```
 
-You need a reachable Qdrant or Postgres. Everything else has a working default.
+You need a reachable Qdrant, or a Postgres/pgvector instance sitting behind a pREST instance. Everything else has a working default.
 
 ## Environment variables
 
@@ -26,14 +26,18 @@ You need a reachable Qdrant or Postgres. Everything else has a working default.
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
 | `QDRANT_API_KEY` | unset | Required by Qdrant Cloud, ignored locally |
 
-### Postgres / pgvector
+### Postgres / pgvector (via pREST)
+
+`MEMORY_BACKEND=postgres` talks to Postgres through [pREST](https://prest.dev), not a direct connection.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `POSTGRES_URL` | `postgresql://postgres@localhost:5432/memory` | Connection URL |
-| `POSTGRES_PASSWORD` | unset | Used when the URL carries no password |
+| `PREST_URL` | unset | pREST endpoint, e.g. `http://localhost:3000` |
+| `PREST_JWT_KEY` | unset | Must match the key pREST was started with; used to sign the admin bearer token |
+| `PREST_REGISTER_ADMIN` | `admin` | pREST admin username the registered queries run as |
+| `PREST_DATABASE` | `memory` | Database name as known to pREST |
 
-Requires the `vector` extension. Tables `memory_collections` and `memory_points` are created on first use.
+Requires the `vector` extension. Tables `memory_collections` and `memory_points`, and the registered pREST queries the server calls, are created on first use.
 
 ### Vectors
 

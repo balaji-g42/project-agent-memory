@@ -132,7 +132,7 @@ Relate entries to each other and walk those relations. Use it when the connectio
 { "project_name": "my-app", "op": "export" }
 ```
 
-`export` dumps the bank as markdown, `import` (with `markdown`) reads that same format back, `summarize` (with `content`) condenses a long text before you store it.
+`export` dumps the bank as markdown, `import` (with `markdown`) reads that same format back, `summarize` (with `content`) condenses a long text before you store it, `delete_collection` permanently deletes the whole memory bank for a project.
 
 ## Working pattern
 
@@ -145,11 +145,11 @@ Keep writes small - one idea per entry. A progress entry is at most five lines: 
 
 ## Configuration
 
-Embeddings run in-process on ONNX by default - no external embedding service needed. See `MCP-CONFIG.md` for the environment variables, including `MEMORY_BACKEND` (`qdrant` default, or `postgres`), `VECTOR_DIM` (default 768), `EMBEDDING_PROVIDER`, and how to point the OpenAI-compatible provider at Ollama, LM Studio or vLLM.
+Embeddings run in-process on ONNX by default - no external embedding service needed. See `MCP-CONFIG.md` for the environment variables, including `MEMORY_BACKEND` (`qdrant` default, or `postgres` - which talks to Postgres through pREST, needing `PREST_URL`/`PREST_JWT_KEY`), `VECTOR_DIM` (default 768), `EMBEDDING_PROVIDER`, and how to point the OpenAI-compatible provider at Ollama, LM Studio or vLLM.
 
 Changing `VECTOR_DIM` against an existing Qdrant collection recreates that collection and destroys its stored memories; the server warns on stderr when it does this. On Postgres the vector column width is fixed at schema creation, so a mismatch instead throws and changes nothing.
 
-Have existing data in Qdrant and want to move it into Postgres once? Run `migrate-qdrant-to-pgvector.mjs` in this directory - a one-time, one-way copy that handles source vectors of any dimension (truncate + re-normalize if wider than the target `VECTOR_DIM`, refuse rather than pad if narrower). `--project <name>` migrates one collection, `--all` migrates every `memory_bank_*` collection on the server (skipping, not aborting on, any that are narrower than the target). `node skill/migrate-qdrant-to-pgvector.mjs --help` for flags.
+Have existing data in Qdrant and want to move it into Postgres once? Run `migrate-qdrant-to-pgvector.mjs` in this directory (needs `--prest-url`/`--prest-jwt-key` or `$PREST_URL`/`$PREST_JWT_KEY` - the script writes through pREST, the same as the server does) - a one-time, one-way copy that handles source vectors of any dimension (truncate + re-normalize if wider than the target `VECTOR_DIM`, refuse rather than pad if narrower). `--project <name>` migrates one collection, `--all` migrates every `memory_bank_*` collection on the server (skipping, not aborting on, any that are narrower than the target). `node skill/migrate-qdrant-to-pgvector.mjs --help` for flags.
 
 ## Migrating from v2.x
 
