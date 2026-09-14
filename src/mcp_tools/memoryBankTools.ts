@@ -115,8 +115,6 @@ interface KnowledgeLink {
 interface ContextHistoryEntry {
     id: string | number;
     contextType: string;
-    previousVersion: any;
-    newVersion: any;
     changes: Record<string, any>;
     timestamp: string;
     pointId: string;
@@ -382,6 +380,13 @@ async function deleteMemory(projectName: string, memoryIds: string[]): Promise<n
     return existing.length;
 }
 
+async function deleteCollection(projectName: string): Promise<boolean> {
+    const collectionName = `memory_bank_${projectName}`;
+    const result = await client.deleteCollection(collectionName);
+    cacheUtils.invalidateProjectCache(projectName);
+    return result;
+}
+
 // ----- Log structured memory entry (for ConPort contexts) -----
 const STRUCTURED_CONTEXT_NAMESPACE = "6f9b6c1e-4c4e-5a2f-9a7c-0d1f2e3a4b5c";
 const EXTERNAL_ID_NAMESPACE = "1b4d7c8a-9e2f-5b3c-8d6a-7f0e1c2b3a4d";
@@ -509,8 +514,6 @@ async function updateStructuredContext(projectName: string, contextType: "produc
     // Store history entry
     const historyEntry = {
         contextType,
-        previousVersion: currentContext,
-        newVersion: updatedContext,
         changes: patchContent,
         timestamp: new Date().toISOString(),
         pointId
@@ -761,8 +764,6 @@ async function getContextHistory(projectName: string, contextType: "productConte
             return {
                 id: hit.id,
                 contextType: historyData.contextType,
-                previousVersion: historyData.previousVersion,
-                newVersion: historyData.newVersion,
                 changes: historyData.changes,
                 timestamp: historyData.timestamp,
                 pointId: historyData.pointId
@@ -1756,6 +1757,7 @@ export {
     listMemory,
     updateMemory,
     deleteMemory,
+    deleteCollection,
     logStructuredMemory,
     getStructuredContext,
     updateStructuredContext,

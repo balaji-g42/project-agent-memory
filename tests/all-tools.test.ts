@@ -36,6 +36,22 @@ describe('Memory MCP v3 tool surface', () => {
 
     afterAll(async () => {
         await client.close();
+
+        if ((process.env.MEMORY_BACKEND || 'qdrant').toLowerCase() === 'postgres') {
+            const { PrestVectorClient } = await import('../src/backends/prest.js');
+            const prest = new PrestVectorClient();
+            await prest.deleteCollection(`memory_bank_${PROJECT}`).catch(() => {});
+        } else {
+            const { QdrantClient } = await import('@qdrant/js-client-rest');
+            const qdrant = new QdrantClient({
+                url: process.env.QDRANT_URL,
+                port: 443,
+                apiKey: process.env.QDRANT_API_KEY || undefined,
+                // @ts-ignore - checkCompatibility may not be in the types but is valid
+                checkCompatibility: false
+            });
+            await qdrant.deleteCollection(`memory_bank_${PROJECT}`).catch(() => {});
+        }
     });
 
     it('tools/list returns exactly the 7 v3 tools', async () => {

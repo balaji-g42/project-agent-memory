@@ -38,6 +38,10 @@ const config: Config = {
     MEMORY_BACKEND: (process.env.MEMORY_BACKEND || "qdrant").toLowerCase(),
     POSTGRES_URL: process.env.POSTGRES_URL || "postgresql://postgres@localhost:5432/memory",
     POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD || null,
+    PREST_URL: process.env.PREST_URL || null,
+    PREST_JWT_KEY: process.env.PREST_JWT_KEY || null,
+    PREST_REGISTER_ADMIN: process.env.PREST_REGISTER_ADMIN || "admin",
+    PREST_DATABASE: process.env.PREST_DATABASE || "memory",
     // Performance optimization settings
     POOL_SIZE: parseInt(process.env.POOL_SIZE || process.env.QDRANT_POOL_SIZE || "10"),
     CACHE_TTL_SECONDS: parseInt(process.env.CACHE_TTL_SECONDS || "300"), // 5 minutes default

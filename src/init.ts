@@ -2,8 +2,8 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { v4 as uuidv4 } from "uuid";
 import config from "./config.js";
-import { PostgresVectorClient } from "./backends/postgres.js";
-import type { MemoryType } from "./types.js";
+import { PrestVectorClient } from "./backends/prest.js";
+import type { MemoryType, VectorClient } from "./types.js";
 
 const MEMORY_TYPES: MemoryType[] = [
     "productContext", 
@@ -22,15 +22,15 @@ const DISTANCE_MAP: Record<string, string> = {
     Dot: "Dot",
 };
 
-const client: any = config.MEMORY_BACKEND === "postgres"
-    ? new PostgresVectorClient()
+const client: VectorClient = config.MEMORY_BACKEND === "postgres"
+    ? new PrestVectorClient()
     : new QdrantClient({
         url: config.QDRANT_URL,
         port: 443,
         apiKey: config.QDRANT_API_KEY || undefined,
         // @ts-ignore - checkCompatibility may not be in the types but is valid
         checkCompatibility: false
-    });
+    }) as unknown as VectorClient;
 
 function readVectorSize(params: unknown): number | undefined {
     const vectors = (params as { vectors?: unknown })?.vectors;

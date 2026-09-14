@@ -15,9 +15,11 @@ import {
     listMemory,
     updateMemory,
     deleteMemory,
+    deleteCollection,
     getStructuredContext,
     updateStructuredContext,
     getSystemPatterns,
+    getContextHistory,
     initializeWorkspace,
     createKnowledgeLink,
     getKnowledgeLinks,
@@ -141,7 +143,9 @@ server.registerTool('memory_context', {
         project_name: z.string().describe("Project name, case-sensitive"),
         product_context: z.record(z.any()).optional().describe("Patch to merge into product context"),
         active_context: z.record(z.any()).optional().describe("Patch to merge into active context"),
-        pattern_limit: z.number().optional().default(20).describe("Maximum system patterns to return")
+        pattern_limit: z.number().optional().default(20).describe("Maximum system patterns to return"),
+        history_for: z.enum(["productContext", "activeContext"]).optional().describe("Also return recent change history for this context type"),
+        history_limit: z.number().optional().default(10).describe("Maximum history entries to return when history_for is set")
     })
 }, async (params) => {
     if (params.product_context) {
@@ -156,13 +160,16 @@ server.registerTool('memory_context', {
         await initializeWorkspace(params.project_name);
     }
 
-    const [product, active, patterns] = await Promise.all([
+    const [product, active, patterns, history] = await Promise.all([
         getStructuredContext(params.project_name, "productContext"),
         getStructuredContext(params.project_name, "activeContext"),
-        getSystemPatterns(params.project_name, params.pattern_limit)
+        getSystemPatterns(params.project_name, params.pattern_limit),
+        params.history_for
+            ? getContextHistory(params.project_name, params.history_for, params.history_limit)
+            : Promise.resolve(undefined)
     ]);
 
-    return text({ productContext: product, activeContext: active, systemPatterns: patterns });
+    return text({ productContext: product, activeContext: active, systemPatterns: patterns, ...(history ? { history } : {}) });
 });
 
 server.registerTool('memory_graph', {
@@ -200,10 +207,10 @@ server.registerTool('memory_graph', {
 });
 
 server.registerTool('memory_admin', {
-    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it.",
+    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it, op=delete_collection permanently deletes the entire memory bank for a project.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
-        op: z.enum(["export", "import", "summarize"]).describe("Admin operation"),
+        op: z.enum(["export", "import", "summarize", "delete_collection"]).describe("Admin operation"),
         memory_types: z.array(memoryTypeSchema).optional().describe("op=export: types to include; defaults to the structured contexts, decisions and progress"),
         markdown: z.string().optional().describe("op=import: markdown in this server's export format"),
         content: z.string().optional().describe("op=summarize: text to condense")
@@ -215,6 +222,9 @@ server.registerTool('memory_admin', {
     if (params.op === "import") {
         if (!params.markdown) throw new Error("op=import requires markdown");
         return text(await importMemoryFromMarkdown(params.project_name, params.markdown));
+    }
+    if (params.op === "delete_collection") {
+        return text({ deleted: await deleteCollection(params.project_name) });
     }
     if (!params.content) throw new Error("op=summarize requires content");
     return text(await summarizeText(params.content));

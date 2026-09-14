@@ -1,6 +1,7 @@
 import "dotenv/config";
+import { createHmac } from "node:crypto";
 import { QdrantClient } from "@qdrant/js-client-rest";
-import pg from "pg";
+import axios from "axios";
 
 function parseArgs(argv) {
     const args = {
@@ -8,8 +9,10 @@ function parseArgs(argv) {
         all: false,
         qdrantUrl: process.env.QDRANT_URL,
         qdrantApiKey: process.env.QDRANT_API_KEY,
-        postgresUrl: process.env.POSTGRES_URL,
-        postgresPassword: process.env.POSTGRES_PASSWORD,
+        prestUrl: process.env.PREST_URL,
+        prestJwtKey: process.env.PREST_JWT_KEY,
+        prestAdmin: process.env.PREST_REGISTER_ADMIN || "admin",
+        prestDatabase: process.env.PREST_DATABASE || "memory",
         vectorDim: process.env.VECTOR_DIM ? parseInt(process.env.VECTOR_DIM, 10) : 768,
         distance: process.env.DISTANCE_METRIC || "Cosine",
         batchSize: 100,
@@ -23,8 +26,10 @@ function parseArgs(argv) {
             case "--all": args.all = true; break;
             case "--qdrant-url": args.qdrantUrl = next(); break;
             case "--qdrant-api-key": args.qdrantApiKey = next(); break;
-            case "--postgres-url": args.postgresUrl = next(); break;
-            case "--postgres-password": args.postgresPassword = next(); break;
+            case "--prest-url": args.prestUrl = next(); break;
+            case "--prest-jwt-key": args.prestJwtKey = next(); break;
+            case "--prest-admin": args.prestAdmin = next(); break;
+            case "--prest-database": args.prestDatabase = next(); break;
             case "--vector-dim": args.vectorDim = parseInt(next(), 10); break;
             case "--distance": args.distance = next(); break;
             case "--batch-size": args.batchSize = parseInt(next(), 10); break;
@@ -41,9 +46,11 @@ function parseArgs(argv) {
 function printHelp() {
     console.log(`Usage: node skill/migrate-qdrant-to-pgvector.mjs (--project <name> | --all) [options]
 
-One-time copy of Qdrant collection(s) into the Postgres/pgvector backend's
+One-time copy of Qdrant collection(s) into the pREST/pgvector backend's
 schema. Both backends stay independent afterwards - this does not enable
-any ongoing sync.
+any ongoing sync. Writes go through pREST's registered-query mechanism,
+the same one the MCP server's PrestVectorClient uses - no direct
+Postgres TCP connection is made.
 
 Required (one of):
   --project <name>          Source collection is memory_bank_<name>
@@ -53,8 +60,10 @@ Required (one of):
 Options (fall back to the matching env var, then a default):
   --qdrant-url <url>        default: $QDRANT_URL or http://localhost:6333
   --qdrant-api-key <key>    default: $QDRANT_API_KEY
-  --postgres-url <url>      default: $POSTGRES_URL or postgresql://postgres@localhost:5432/memory
-  --postgres-password <pw>  default: $POSTGRES_PASSWORD
+  --prest-url <url>         default: $PREST_URL
+  --prest-jwt-key <key>     default: $PREST_JWT_KEY
+  --prest-admin <username>  default: $PREST_REGISTER_ADMIN or admin
+  --prest-database <name>   default: $PREST_DATABASE or memory
   --vector-dim <n>          Target Postgres vector(n) width, shared by every migrated
                              collection. default: $VECTOR_DIM or 768
   --distance <name>         Cosine | Euclid | Dot. default: $DISTANCE_METRIC or Cosine
@@ -83,46 +92,155 @@ function truncateAndNormalize(vector, target) {
     return magnitude === 0 ? sliced : sliced.map(v => v / magnitude);
 }
 
-function connectionString(url, password) {
-    const parsed = new URL(url);
-    if (!parsed.password && password) parsed.password = password;
-    return parsed.toString();
+function toVectorHeaderValue(vector) {
+    return vector.map(v => v.toFixed(5)).join(" ");
 }
 
-async function ensureSchema(pool, dim) {
-    await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS memory_collections (
+function base64url(input) {
+    return Buffer.from(input)
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+}
+
+function signPrestAdminJwt(key, username) {
+    const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+    const payload = base64url(JSON.stringify({
+        UserInfo: { id: 0, name: "", username, metadata: null },
+        exp: Math.floor(Date.now() / 1000) + 300
+    }));
+    const signature = base64url(createHmac("sha256", key).update(`${header}.${payload}`).digest());
+    return `${header}.${payload}.${signature}`;
+}
+
+class Prest {
+    constructor(args) {
+        if (!args.prestUrl) throw new Error("PREST_URL is not configured (pass --prest-url or set $PREST_URL)");
+        if (!args.prestJwtKey) throw new Error("PREST_JWT_KEY is not configured (pass --prest-jwt-key or set $PREST_JWT_KEY)");
+        this.url = args.prestUrl;
+        this.database = args.prestDatabase;
+        this.jwtKey = args.prestJwtKey;
+        this.admin = args.prestAdmin;
+    }
+
+    authHeader() {
+        return { Authorization: `Bearer ${signPrestAdminJwt(this.jwtKey, this.admin)}` };
+    }
+
+    async register(location, name, readSql, writeSql) {
+        const body = { database: this.database, location, name, read_sql: readSql };
+        if (writeSql) body.write_sql = writeSql;
+        await axios.post(`${this.url}/_QUERIES/registry`, body, { headers: this.authHeader() })
+            .catch(async err => {
+                if (err.response?.status === 409 || err.response?.status === 400) {
+                    await axios.put(`${this.url}/_QUERIES/registry/${location}/${name}`, body, { headers: this.authHeader() });
+                    return;
+                }
+                throw err;
+            });
+    }
+
+    buildParams(params) {
+        const qs = new URLSearchParams();
+        for (const [key, value] of Object.entries(params)) {
+            if (value === undefined) continue;
+            if (Array.isArray(value)) {
+                for (const v of value) qs.append(key, v);
+            } else {
+                qs.append(key, String(value));
+            }
+        }
+        return qs;
+    }
+
+    async write(location, name, params = {}, extraHeaders) {
+        const qs = this.buildParams(params);
+        const { data } = await axios.post(
+            `${this.url}/_QUERIES/${this.database}/${location}/${name}?${qs.toString()}`,
+            {},
+            { headers: { ...this.authHeader(), ...extraHeaders } }
+        );
+        return data;
+    }
+}
+
+async function ensureSchema(prest, dim) {
+    await prest.register("memory", "setup_extension", "SELECT 1", "CREATE EXTENSION IF NOT EXISTS vector");
+    await prest.register(
+        "memory",
+        "setup_collections_table",
+        "SELECT 1",
+        `CREATE TABLE IF NOT EXISTS memory_collections (
             name TEXT PRIMARY KEY,
             vector_size INTEGER NOT NULL,
             distance TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-    `);
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS memory_points (
+        )`
+    );
+    await prest.register(
+        "memory",
+        "setup_points_table",
+        "SELECT 1",
+        `CREATE TABLE IF NOT EXISTS memory_points (
             collection TEXT NOT NULL,
             id TEXT NOT NULL,
             payload JSONB NOT NULL DEFAULT '{}'::jsonb,
             embedding vector(${dim}) NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (collection, id)
-        )
-    `);
-    await pool.query("CREATE INDEX IF NOT EXISTS memory_points_payload_idx ON memory_points USING gin (payload)");
-    await pool.query("CREATE INDEX IF NOT EXISTS memory_points_embedding_idx ON memory_points USING hnsw (embedding vector_cosine_ops)");
-    await pool.query("CREATE INDEX IF NOT EXISTS memory_points_updated_idx ON memory_points (collection, updated_at DESC)");
-
-    const { rows } = await pool.query(
-        "SELECT atttypmod AS dims FROM pg_attribute WHERE attrelid = 'memory_points'::regclass AND attname = 'embedding'"
+        )`
     );
-    const actual = rows[0]?.dims;
-    if (actual != null && actual > 0 && actual !== dim) {
-        throw new Error(`memory_points.embedding is already vector(${actual}); pass --vector-dim=${actual} or migrate that table first.`);
+    await prest.register(
+        "memory",
+        "setup_payload_idx",
+        "SELECT 1",
+        "CREATE INDEX IF NOT EXISTS memory_points_payload_idx ON memory_points USING gin (payload)"
+    );
+    await prest.register(
+        "memory",
+        "setup_embedding_idx",
+        "SELECT 1",
+        "CREATE INDEX IF NOT EXISTS memory_points_embedding_idx ON memory_points USING hnsw (embedding vector_cosine_ops)"
+    );
+    await prest.register(
+        "memory",
+        "setup_updated_idx",
+        "SELECT 1",
+        "CREATE INDEX IF NOT EXISTS memory_points_updated_idx ON memory_points (collection, updated_at DESC)"
+    );
+
+    for (const name of [
+        "setup_extension",
+        "setup_collections_table",
+        "setup_points_table",
+        "setup_payload_idx",
+        "setup_embedding_idx",
+        "setup_updated_idx"
+    ]) {
+        await prest.write("memory", name, {});
     }
+
+    await prest.register(
+        "memory",
+        "migrate_create_collection",
+        "SELECT 1",
+        `INSERT INTO memory_collections (name, vector_size, distance)
+         VALUES ({{sqlVal "name"}}, {{sqlVal "vector_size"}}, {{sqlVal "distance"}})
+         ON CONFLICT (name) DO NOTHING`
+    );
+    await prest.register(
+        "memory",
+        "migrate_upsert_point",
+        "SELECT 1",
+        `INSERT INTO memory_points (collection, id, payload, embedding)
+         VALUES ({{sqlVal "collection"}}, {{sqlVal "id"}}, {{sqlVal "payload"}}::jsonb, ('[' || replace({{sqlVal "header.X-Vector"}}, ' ', ',') || ']')::vector)
+         ON CONFLICT (collection, id) DO UPDATE
+         SET payload = EXCLUDED.payload, embedding = EXCLUDED.embedding, updated_at = now()`
+    );
 }
 
-async function migrateCollection(qdrant, pool, collection, args) {
+async function migrateCollection(qdrant, prest, collection, args) {
     const info = await qdrant.getCollection(collection);
     const sourceDim = info.config?.params?.vectors?.size;
     console.log(`\n${collection}: ${info.points_count} points, ${sourceDim}-dim vectors, distance=${info.config?.params?.vectors?.distance}`);
@@ -139,11 +257,11 @@ async function migrateCollection(qdrant, pool, collection, args) {
     }
 
     if (!args.dryRun) {
-        await pool.query(
-            `INSERT INTO memory_collections (name, vector_size, distance) VALUES ($1, $2, $3)
-             ON CONFLICT (name) DO NOTHING`,
-            [collection, args.vectorDim, args.distance]
-        );
+        await prest.write("memory", "migrate_create_collection", {
+            name: collection,
+            vector_size: args.vectorDim,
+            distance: args.distance
+        });
     }
 
     let migrated = 0;
@@ -159,19 +277,14 @@ async function migrateCollection(qdrant, pool, collection, args) {
         if (page.points.length === 0) break;
 
         if (!args.dryRun) {
-            const params = [collection];
-            const tuples = page.points.map(point => {
+            for (const point of page.points) {
                 const vector = truncateAndNormalize(Array.isArray(point.vector) ? point.vector : [], args.vectorDim);
-                params.push(String(point.id), JSON.stringify(point.payload ?? {}), `[${vector.join(",")}]`);
-                const i = params.length;
-                return `($1, $${i - 2}, $${i - 1}::jsonb, $${i}::vector)`;
-            });
-            await pool.query(
-                `INSERT INTO memory_points (collection, id, payload, embedding) VALUES ${tuples.join(", ")}
-                 ON CONFLICT (collection, id) DO UPDATE
-                 SET payload = EXCLUDED.payload, embedding = EXCLUDED.embedding, updated_at = now()`,
-                params
-            );
+                await prest.write("memory", "migrate_upsert_point", {
+                    collection,
+                    id: String(point.id),
+                    payload: JSON.stringify(point.payload ?? {})
+                }, { "X-Vector": toVectorHeaderValue(vector) });
+            }
         }
 
         migrated += page.points.length;
@@ -222,17 +335,17 @@ async function main() {
         collections = [`memory_bank_${args.project}`];
     }
 
-    let pool;
+    let prest;
     if (!args.dryRun) {
-        pool = new pg.Pool({ connectionString: connectionString(args.postgresUrl || "postgresql://postgres@localhost:5432/memory", args.postgresPassword) });
-        await ensureSchema(pool, args.vectorDim);
+        prest = new Prest(args);
+        await ensureSchema(prest, args.vectorDim);
     } else {
-        console.log("--dry-run: no Postgres writes will be made.");
+        console.log("--dry-run: no pREST writes will be made.");
     }
 
     const results = [];
     for (const collection of collections) {
-        results.push(await migrateCollection(qdrant, pool, collection, args));
+        results.push(await migrateCollection(qdrant, prest, collection, args));
     }
 
     const migratedTotal = results.reduce((sum, r) => sum + r.migrated, 0);
@@ -241,8 +354,6 @@ async function main() {
     if (skipped.length > 0) {
         console.log(`Skipped (narrower than --vector-dim=${args.vectorDim}): ${skipped.map(r => r.collection).join(", ")}`);
     }
-
-    if (pool) await pool.end();
 }
 
 main().catch(err => {

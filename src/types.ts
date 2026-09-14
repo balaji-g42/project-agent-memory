@@ -22,6 +22,10 @@ export interface Config {
     MEMORY_BACKEND: string;
     POSTGRES_URL: string;
     POSTGRES_PASSWORD: string | null;
+    PREST_URL: string | null;
+    PREST_JWT_KEY: string | null;
+    PREST_REGISTER_ADMIN: string;
+    PREST_DATABASE: string;
     CACHE_TTL_SECONDS: number;
     EMBEDDING_CACHE_SIZE: number;
     QUERY_CACHE_SIZE: number;
@@ -36,6 +40,35 @@ export interface QdrantPoint {
     id: string;
     vector: number[];
     payload: Record<string, any>;
+}
+
+export type VectorFilter = { must?: Array<{ key: string; match: { value?: any; any?: any[] } }> } | null | undefined;
+
+export interface VectorPoint {
+    id: string | number;
+    vector: number[];
+    payload?: Record<string, any> | null;
+}
+
+export interface VectorClient {
+    getCollections(): Promise<{ collections: Array<{ name: string }> }>;
+    getCollection(name: string): Promise<any>;
+    createCollection(name: string, options: { vectors: { size: number; distance: string } }): Promise<any>;
+    deleteCollection(name: string): Promise<any>;
+    upsert(name: string, options: { wait?: boolean; points: VectorPoint[] }): Promise<any>;
+    retrieve(
+        name: string,
+        options: { ids: Array<string | number>; with_payload?: boolean; with_vector?: boolean }
+    ): Promise<Array<{ id: string | number; payload?: Record<string, any>; vector?: number[] }>>;
+    search(
+        name: string,
+        options: { vector: number[]; limit?: number; filter?: VectorFilter; with_payload?: boolean; with_vector?: boolean }
+    ): Promise<Array<{ id: string | number; score: number; payload?: Record<string, any> }>>;
+    scroll(
+        name: string,
+        options: { filter?: VectorFilter; limit?: number; with_payload?: boolean; with_vector?: boolean }
+    ): Promise<{ points: Array<{ id: string | number; payload?: Record<string, any> }>; next_page_offset: unknown }>;
+    delete(name: string, options: { wait?: boolean; points: Array<string | number> }): Promise<any>;
 }
 
 export interface SearchResult {
