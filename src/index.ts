@@ -56,7 +56,7 @@ const MEMORY_TYPES = [
 const memoryTypeSchema = z.enum(MEMORY_TYPES);
 
 const server = new McpServer({
-    name: "memory-qdrant-mcp",
+    name: "project-agent-memory",
     version: packageJson.version,
 });
 
@@ -225,7 +225,7 @@ async function main() {
 
     try {
         await server.connect(transport);
-        console.error("Memory Qdrant MCP server running on stdio");
+        console.error("Project Agent Memory server running on stdio");
     } catch (error) {
         const err = error as Error;
         console.error("Error connecting server:", err.stack || err);

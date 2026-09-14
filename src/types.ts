@@ -1,4 +1,4 @@
-// Type definitions for the memory-qdrant-mcp project
+// Type definitions for the project-agent-memory project
 
 export interface Config {
     PORT: number;

@@ -1,4 +1,4 @@
-# Memory Qdrant MCP
+# Project Agent Memory
 
 A TypeScript MCP (Model Context Protocol) server that gives a coding agent persistent project memory - context, decisions, progress and patterns - backed by Qdrant or PostgreSQL/pgvector, selected with one environment variable.
 
@@ -28,8 +28,8 @@ Three ways in, most to least automated. All of them still need a reachable Qdran
 Bundles the MCP server, the agent skill, and memory-first session hooks (detects `git commit`, nudges the agent to log it, hard-blocks `Stop` until it does) in one install.
 
 ```bash
-git clone https://github.com/balaji-g42/memory-qdrant-mcp
-claude --plugin-dir ./memory-qdrant-mcp
+git clone https://github.com/balaji-g42/project-agent-memory
+claude --plugin-dir ./project-agent-memory
 ```
 
 On first enable, Claude Code prompts for `memory_backend` (`qdrant` or `postgres`) and the matching URL/key via the plugin's `userConfig` - nothing is hardcoded to Qdrant. Validate the manifest any time with `claude plugin validate .`.
@@ -40,7 +40,7 @@ Includes: `.mcp.json` (server registration), `skill/` (agent skill), `hooks/` (`
 
 Just the "when and how to use these tools" instructions - no hooks, no bundled server registration. Pair it with a manual MCP config (option 3).
 
-- **Claude Code**: copy `skill/*` into `.claude/skills/memory-qdrant-mcp/` (project) or `~/.claude/skills/memory-qdrant-mcp/` (global)
+- **Claude Code**: copy `skill/*` into `.claude/skills/project-agent-memory/` (project) or `~/.claude/skills/project-agent-memory/` (global)
 - **Claude.ai**: zip `skill/` and upload via Settings → Features → Skills
 
 See [`skill/README.md`](skill/README.md).
@@ -50,14 +50,14 @@ See [`skill/README.md`](skill/README.md).
 Register the server yourself - no skill, no hooks.
 
 ```bash
-npx -y memory-qdrant-mcp
+npx -y project-agent-memory
 ```
 
 Or from source:
 
 ```bash
-git clone https://github.com/balaji-g42/memory-qdrant-mcp
-cd memory-qdrant-mcp
+git clone https://github.com/balaji-g42/project-agent-memory
+cd project-agent-memory
 npm install
 npm run build
 node dist/index.js
@@ -68,7 +68,7 @@ node dist/index.js
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "memory-qdrant-mcp"],
+      "args": ["-y", "project-agent-memory"],
       "env": {
         "QDRANT_URL": "http://localhost:6333"
       }
@@ -150,7 +150,7 @@ The full environment-variable reference, including the Postgres table, is in [`s
 
 | Provider | Notes |
 |----------|-------|
-| `onnx` (default) | In-process CPU inference. `nomic-ai/nomic-embed-text-v1.5`, 768 dims, ~140MB at `q8`, downloaded once into `~/mcp/memory-qdrant-mcp/models` so `npx` runs reuse it |
+| `onnx` (default) | In-process CPU inference. `nomic-ai/nomic-embed-text-v1.5`, 768 dims, ~140MB at `q8`, downloaded once into `~/mcp/project-agent-memory/models` so `npx` runs reuse it |
 | `openai` | Any endpoint speaking `/v1/embeddings`. Set `OPENAI_BASE_URL`; for Ollama use `http://localhost:11434/v1` |
 | `gemini` | Requires `GEMINI_API_KEY` |
 | `openrouter` | Requires `OPENROUTER_API_KEY` |
@@ -206,7 +206,7 @@ v3.0 condenses the 35 v2 tools into these 7; the per-tool mapping is in [`skill/
 `skill/migrate-qdrant-to-pgvector.mjs` is a one-time, one-way copy of every point in a Qdrant collection into the Postgres backend's schema. It's only needed if you have existing Qdrant data and want to start using `MEMORY_BACKEND=postgres` with it - the two backends are otherwise independent and nothing else moves data between them.
 
 ```bash
-node skill/migrate-qdrant-to-pgvector.mjs --project memory-qdrant-mcp \
+node skill/migrate-qdrant-to-pgvector.mjs --project project-agent-memory \
   --qdrant-url http://localhost:6333 \
   --postgres-url postgresql://postgres@localhost:5432/memory
 ```
@@ -237,7 +237,7 @@ printf '%s\n' \
 ### Project structure
 
 ```
-memory-qdrant-mcp/
+project-agent-memory/
 ├── src/
 │   ├── index.ts              # MCP server entry point, 7 tool registrations
 │   ├── config.ts             # Environment configuration and VECTOR_DIM validation

@@ -5,7 +5,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "memory-qdrant-mcp"
+        "project-agent-memory"
       ],
       "env": {
         "QDRANT_URL": "${env:QDRANT_URL}",

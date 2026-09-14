@@ -18,8 +18,8 @@ class OpenRouterProvider extends EmbeddingProviderBase {
             baseURL: "https://openrouter.ai/api/v1",
             apiKey: config.OPENROUTER_API_KEY,
             defaultHeaders: {
-                "HTTP-Referer": "https://github.com/balaji-g42/memory-qdrant-mcp",
-                "X-Title": "Memory-Qdrant-MCP",
+                "HTTP-Referer": "https://github.com/balaji-g42/project-agent-memory",
+                "X-Title": "Project-Agent-Memory",
             },
         });
     }

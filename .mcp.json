@@ -2,7 +2,7 @@
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "memory-qdrant-mcp"],
+      "args": ["-y", "project-agent-memory"],
       "env": {
         "MEMORY_BACKEND": "${user_config.memory_backend:-qdrant}",
         "QDRANT_URL": "${user_config.qdrant_url:-http://localhost:6333}",

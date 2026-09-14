@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const PROJECT = 'memory-qdrant-mcp-test';
+const PROJECT = 'project-agent-memory-test';
 
 function parse(res: any) {
     const t = res.content?.[0]?.text ?? '';
@@ -249,7 +249,7 @@ describe('Memory MCP v3 tool surface', () => {
         it('patch merges and is reflected in the same call', async () => {
             const r = await call('memory_context', {
                 project_name: PROJECT,
-                product_context: { name: 'memory-qdrant-mcp', goal: 'move off Qdrant' },
+                product_context: { name: 'project-agent-memory', goal: 'move off Qdrant' },
                 active_context: { focus: 'testing the seven tools' }
             });
             expect(r.productContext.goal).toBe('move off Qdrant');

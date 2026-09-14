@@ -1,9 +1,9 @@
 ---
-name: memory-qdrant-mcp
+name: project-agent-memory
 description: Persistent project memory backed by Qdrant or PostgreSQL/pgvector, selected with one environment variable. Use this when you need to store or recall context, decisions, progress, or patterns across conversations. Provides 7 tools - memory_create, memory_read, memory_update, memory_delete, memory_context, memory_graph, memory_admin. Use when the user asks to remember something, recall past decisions, track progress, link related memories, or search project history.
 ---
 
-# Memory Qdrant MCP
+# Project Agent Memory
 
 Persistent, semantically searchable project memory. Seven tools, one collection per project (`memory_bank_<project_name>`).
 

@@ -50,7 +50,7 @@ function today() {
 }
 
 const MEMORY_RULES = (name) =>
-  `PERSISTENT MEMORY: this project's long-term memory is the memory-qdrant-mcp server, exposed ` +
+  `PERSISTENT MEMORY: this project's long-term memory is the project-agent-memory server, exposed ` +
   `as mcp__memory__* tools (memory_create, memory_read, memory_update, memory_delete, ` +
   `memory_context, memory_graph, memory_admin).
 

@@ -5,7 +5,7 @@
 Runs via `npx` - no global install, no long-running service:
 
 ```bash
-npx -y memory-qdrant-mcp
+npx -y project-agent-memory
 ```
 
 You need a reachable Qdrant or Postgres. Everything else has a working default.
@@ -52,7 +52,7 @@ Requires the `vector` extension. Tables `memory_collections` and `memory_points`
 |----------|---------|-------------|
 | `EMBEDDING_PROVIDER` | `onnx` | `onnx`, `openai`, `gemini`, `openrouter` |
 | `EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | Model id for the chosen provider |
-| `ONNX_MODEL_CACHE_DIR` | `~/mcp/memory-qdrant-mcp/models` | Where the ONNX model is cached |
+| `ONNX_MODEL_CACHE_DIR` | `~/mcp/project-agent-memory/models` | Where the ONNX model is cached |
 | `ONNX_DTYPE` | `q8` | Quantization: `q8`, `q4`, `fp16`, `fp32` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Endpoint for the `openai` provider |
 | `OPENAI_API_KEY` | unset | Key for the `openai` provider |
@@ -119,7 +119,7 @@ Long text is summarized before embedding when it exceeds the chunking threshold.
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "memory-qdrant-mcp"],
+      "args": ["-y", "project-agent-memory"],
       "env": {
         "QDRANT_URL": "http://localhost:6333"
       }
@@ -137,7 +137,7 @@ That is the whole minimum config: ONNX embeddings and `VECTOR_DIM=768` are the d
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "memory-qdrant-mcp"],
+      "args": ["-y", "project-agent-memory"],
       "env": {
         "QDRANT_URL": "https://your-cluster.qdrant.io",
         "QDRANT_API_KEY": "your_key",
@@ -158,7 +158,7 @@ That is the whole minimum config: ONNX embeddings and `VECTOR_DIM=768` are the d
   "mcpServers": {
     "memory": {
       "command": "node",
-      "args": ["D:/WorkFolder/memory-qdrant-mcp/dist/index.js"],
+      "args": ["D:/WorkFolder/project-agent-memory/dist/index.js"],
       "env": { "QDRANT_URL": "http://localhost:6333" }
     }
   }

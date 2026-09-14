@@ -4,7 +4,7 @@ import type { Config } from "./types.js";
 
 const MAX_VECTOR_DIM = 4096;
 
-const DEFAULT_MODEL_CACHE_DIR = join(homedir(), "mcp", "memory-qdrant-mcp", "models");
+const DEFAULT_MODEL_CACHE_DIR = join(homedir(), "mcp", "project-agent-memory", "models");
 
 function resolveVectorDim(raw: string | undefined): number {
     if (raw === undefined || raw.trim() === "") return 768;

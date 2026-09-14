@@ -1,4 +1,4 @@
-# Memory Qdrant MCP Agent Skill
+# Project Agent Memory — Agent Skill
 
 A Claude Agent Skill for persistent project memory backed by Qdrant or PostgreSQL/pgvector (`MEMORY_BACKEND`, one env var). It lets Claude carry context, decisions, progress and patterns across conversations.
 
@@ -31,14 +31,14 @@ skill/
 
 **Project-specific:**
 ```bash
-mkdir -p .claude/skills/memory-qdrant-mcp
-cp skill/* .claude/skills/memory-qdrant-mcp/
+mkdir -p .claude/skills/project-agent-memory
+cp skill/* .claude/skills/project-agent-memory/
 ```
 
 **Global (all projects):**
 ```bash
-mkdir -p ~/.claude/skills/memory-qdrant-mcp
-cp skill/* ~/.claude/skills/memory-qdrant-mcp/
+mkdir -p ~/.claude/skills/project-agent-memory
+cp skill/* ~/.claude/skills/project-agent-memory/
 ```
 
 Claude Code auto-discovers filesystem-based Skills.
@@ -47,7 +47,7 @@ Claude Code auto-discovers filesystem-based Skills.
 
 1. Zip the skill directory:
    ```bash
-   cd skill && zip -r ../memory-qdrant-mcp-skill.zip .
+   cd skill && zip -r ../project-agent-memory-skill.zip .
    ```
 2. Settings → Features → Skills → upload the zip.
 
@@ -56,8 +56,8 @@ Skills are per-user, not organization-wide.
 ### Agent SDK
 
 ```bash
-mkdir -p .claude/skills/memory-qdrant-mcp
-cp skill/* .claude/skills/memory-qdrant-mcp/
+mkdir -p .claude/skills/project-agent-memory
+cp skill/* .claude/skills/project-agent-memory/
 ```
 
 The SDK auto-discovers `.claude/skills/`.
@@ -78,7 +78,7 @@ Minimum config - the server runs via `npx`, embeds locally with ONNX, and needs 
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "memory-qdrant-mcp"],
+      "args": ["-y", "project-agent-memory"],
       "env": { "QDRANT_URL": "http://localhost:6333" }
     }
   }
@@ -177,7 +177,7 @@ Opens http://localhost:6274 for interactive tool testing.
 
 ### Skill not available
 
-**Claude Code:** check `.claude/skills/memory-qdrant-mcp/SKILL.md` exists, the YAML frontmatter is valid, then restart.
+**Claude Code:** check `.claude/skills/project-agent-memory/SKILL.md` exists, the YAML frontmatter is valid, then restart.
 
 **Claude.ai:** Settings → Features → Skills; each user uploads their own copy.
 
@@ -215,7 +215,7 @@ With the default `onnx` provider no API key is needed at all - embeddings run in
 
 ## Resources
 
-- **GitHub**: [memory-qdrant-mcp](https://github.com/balaji-g42/memory-qdrant-mcp)
+- **GitHub**: [project-agent-memory](https://github.com/balaji-g42/project-agent-memory)
 - **Agent Skills Docs**: https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills
 - **MCP Protocol**: https://modelcontextprotocol.io/
 - **Qdrant**: https://qdrant.tech/

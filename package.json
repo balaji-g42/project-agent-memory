@@ -1,10 +1,10 @@
 {
-  "name": "memory-qdrant-mcp",
+  "name": "project-agent-memory",
   "version": "3.0.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "memory-qdrant-mcp": "dist/index.js"
+    "project-agent-memory": "dist/index.js"
   },
   "files": [
     "dist/",
@@ -32,9 +32,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/balaji-g42/memory-qdrant-mcp.git"
+    "url": "https://github.com/balaji-g42/project-agent-memory.git"
   },
-  "homepage": "https://github.com/balaji-g42/memory-qdrant-mcp.git",
+  "homepage": "https://github.com/balaji-g42/project-agent-memory.git",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@huggingface/transformers": "^3.0.0",

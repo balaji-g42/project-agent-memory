@@ -2,7 +2,7 @@
 
 `tests/all-tools.test.ts` is a Jest suite that drives the built server over stdio via the MCP SDK client and exercises all 7 v3 tools against a real backend (Qdrant or Postgres — whichever `MEMORY_BACKEND` selects). There are no mocks; every test is a real round trip through the server.
 
-All rows are written under project name `memory-qdrant-mcp-test` (plus `memory-qdrant-mcp-test-isolation` for the isolation check), so a run never touches production data. Nothing deletes these test collections afterward — drop them manually if you want a clean slate (`memory_bank_memory-qdrant-mcp-test*` in Qdrant, or the matching rows in Postgres' `memory_points`/`memory_collections`).
+All rows are written under project name `project-agent-memory-test` (plus `project-agent-memory-test-isolation` for the isolation check), so a run never touches production data. Nothing deletes these test collections afterward — drop them manually if you want a clean slate (`memory_bank_project-agent-memory-test*` in Qdrant, or the matching rows in Postgres' `memory_points`/`memory_collections`).
 
 ## Running
 
