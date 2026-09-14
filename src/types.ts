@@ -60,10 +60,10 @@ export interface VectorClient {
         name: string,
         options: { ids: Array<string | number>; with_payload?: boolean; with_vector?: boolean }
     ): Promise<Array<{ id: string | number; payload?: Record<string, any>; vector?: number[] }>>;
-    search(
+    query(
         name: string,
-        options: { vector: number[]; limit?: number; filter?: VectorFilter; with_payload?: boolean; with_vector?: boolean }
-    ): Promise<Array<{ id: string | number; score: number; payload?: Record<string, any> }>>;
+        options: { query: number[]; limit?: number; filter?: VectorFilter; with_payload?: boolean; with_vector?: boolean }
+    ): Promise<{ points: Array<{ id: string | number; score: number; payload?: Record<string, any> }> }>;
     scroll(
         name: string,
         options: { filter?: VectorFilter; limit?: number; with_payload?: boolean; with_vector?: boolean }

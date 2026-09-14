@@ -283,8 +283,9 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
     if (memoryType) mustFilter.push({ key: "type", match: { value: memoryType } });
     mustFilter.push(...metadataFilterClauses(metadataFilter));
 
-    const results = await client.search(collectionName, {
-        vector,
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: vector,
         limit: topK,
         filter: { must: mustFilter }
     });
@@ -456,8 +457,8 @@ async function getStructuredContext(projectName: string, contextType: "productCo
     });
 
     if (results.length === 0) {
-        results = await client.search(collectionName, {
-            vector: (await getCachedEmbeddings([`context type: ${contextType}`]))[0],
+        results = (await client.query(collectionName, {
+            query: (await getCachedEmbeddings([`context type: ${contextType}`]))[0],
             limit: 1,
             filter: {
                 must: [
@@ -468,7 +469,7 @@ async function getStructuredContext(projectName: string, contextType: "productCo
             },
             with_payload: true,
             with_vector: false
-        });
+        })).points;
     }
 
     let contextResult: Record<string, any>;
@@ -539,8 +540,9 @@ async function getDecisions(projectName: string, limit: number = 10, _tags_filte
     ];
 
     // For now, we'll implement basic filtering - tags would need additional payload structure
-    const results = await client.search(collectionName, {
-        vector: (await getEmbeddingProvider().embedTexts(["decisions"]))[0],
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: (await getEmbeddingProvider().embedTexts(["decisions"]))[0],
         limit: limit,
         filter: { must: mustFilter }
     });
@@ -559,8 +561,9 @@ async function searchDecisionsFTS(projectName: string, queryTerm: string, limit:
     // Use semantic search with the query term
     const vector = (await getEmbeddingProvider().embedTexts([queryTerm]))[0];
 
-    const results = await client.search(collectionName, {
-        vector,
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: vector,
         limit: limit,
         filter: {
             must: [
@@ -593,8 +596,9 @@ async function semanticSearch(projectName: string, queryText: string, limit: num
         });
     }
 
-    const results = await client.search(collectionName, {
-        vector,
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: vector,
         limit: limit,
         filter: { must: mustFilter }
     });
@@ -746,8 +750,9 @@ async function getContextHistory(projectName: string, contextType: "productConte
 
     const collectionName = `memory_bank_${projectName}`;
 
-    const results = await client.search(collectionName, {
-        vector: (await getEmbeddingProvider().embedTexts(["context history"]))[0],
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: (await getEmbeddingProvider().embedTexts(["context history"]))[0],
         limit: limit,
         filter: {
             must: [
@@ -844,8 +849,9 @@ async function batchQueryMemory(projectName: string, queries: BatchQuery[]): Pro
             const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
             if (query.memoryType) mustFilter.push({ key: "type", match: { value: query.memoryType } });
 
-            const results = await client.search(collectionName, {
-                vector,
+            const { points: results } = await client.query(collectionName, {
+                with_payload: true,
+                query: vector,
                 limit: query.topK || 5,
                 filter: { must: mustFilter }
             });
@@ -911,8 +917,9 @@ async function getSystemPatterns(projectName: string, limit: number = 50): Promi
 
     const collectionName = `memory_bank_${projectName}`;
 
-    const results = await client.search(collectionName, {
-        vector: (await getCachedEmbeddings(["system patterns and conventions"]))[0],
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: (await getCachedEmbeddings(["system patterns and conventions"]))[0],
         limit: limit,
         filter: {
             must: [
@@ -987,8 +994,9 @@ async function searchSystemPatterns(projectName: string, queryText: string, limi
 
     const vector = (await getEmbeddingProvider().embedTexts([queryText]))[0];
 
-    const results = await client.search(collectionName, {
-        vector,
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: vector,
         limit: limit,
         filter: {
             must: [
@@ -1027,8 +1035,9 @@ async function getProgressWithStatus(projectName: string, status: ProgressStatus
         mustFilter.push({ key: "status", match: { value: status } });
     }
 
-    const results = await client.search(collectionName, {
-        vector: (await getEmbeddingProvider().embedTexts(["progress tracking"]))[0],
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: (await getEmbeddingProvider().embedTexts(["progress tracking"]))[0],
         limit: limit,
         filter: { must: mustFilter }
     });
@@ -1098,8 +1107,9 @@ async function searchProgressEntries(projectName: string, queryText: string, sta
         mustFilter.push({ key: "status", match: { value: status } });
     }
 
-    const results = await client.search(collectionName, {
-        vector,
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: vector,
         limit: limit,
         filter: { must: mustFilter }
     });
@@ -1194,8 +1204,9 @@ async function queryCustomData(projectName: string, dataType: string | null = nu
     // Note: Complex metadata filtering would require more advanced payload structure
     // For now, we'll use basic filtering
 
-    const results = await client.search(collectionName, {
-        vector: (await getEmbeddingProvider().embedTexts(["custom data query"]))[0],
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: (await getEmbeddingProvider().embedTexts(["custom data query"]))[0],
         limit: limit,
         filter: { must: mustFilter }
     });
@@ -1247,8 +1258,9 @@ async function searchCustomData(projectName: string, queryText: string, dataType
         mustFilter.push({ key: "dataType", match: { value: dataType } });
     }
 
-    const results = await client.search(collectionName, {
-        vector,
+    const { points: results } = await client.query(collectionName, {
+        with_payload: true,
+        query: vector,
         limit: limit,
         filter: { must: mustFilter }
     });
