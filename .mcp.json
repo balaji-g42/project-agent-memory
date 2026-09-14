@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "project-agent-memory"],
+      "env": {
+        "MEMORY_BACKEND": "${user_config.memory_backend:-qdrant}",
+        "QDRANT_URL": "${user_config.qdrant_url:-http://localhost:6333}",
+        "QDRANT_API_KEY": "${user_config.qdrant_api_key:-}",
+        "POSTGRES_URL": "${user_config.postgres_url:-postgresql://postgres@localhost:5432/memory}",
+        "POSTGRES_PASSWORD": "${user_config.postgres_password:-}"
+      }
+    }
+  }
+}

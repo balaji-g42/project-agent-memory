@@ -1,20 +1,21 @@
 {
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/servers/main/schema.json",
   "mcpServers": {
-    "memory-qdrant-mcp": {
-      "command": "node",
+    "memory": {
+      "command": "npx",
       "args": [
-        "${workspaceFolder}/node_modules/memory-qdrant-mcp/dist/index.js"
+        "-y",
+        "project-agent-memory"
       ],
       "env": {
         "QDRANT_URL": "${env:QDRANT_URL}",
         "QDRANT_API_KEY": "${env:QDRANT_API_KEY}",
-        "EMBEDDING_PROVIDER": "openrouter",
-        "EMBEDDING_MODEL": "qwen/qwen3-embedding-8b",
-        "SUMMARIZER_PROVIDER": "openrouter", 
+        "EMBEDDING_PROVIDER": "onnx",
+        "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5",
+        "VECTOR_DIM": "768",
+        "SUMMARIZER_PROVIDER": "openrouter",
         "SUMMARIZER_MODEL": "openai/gpt-oss-20b:free",
-        "OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}",
-        "DEFAULT_TOP_K_MEMORY_QUERY": "3"
+        "OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}"
       }
     }
   }

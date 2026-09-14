@@ -1,190 +1,42 @@
-# Memory-Qdrant MCP Tests
+# Testing
 
-Comprehensive test suite for all 35 MCP tools in the memory-qdrant-mcp project.
+`tests/all-tools.test.ts` is a Jest suite that drives the built server over stdio via the MCP SDK client and exercises all 7 v3 tools against a real backend (Qdrant or Postgres — whichever `MEMORY_BACKEND` selects). There are no mocks; every test is a real round trip through the server.
 
-## Test Coverage
+All rows are written under project name `project-agent-memory-test` (plus `project-agent-memory-test-isolation` for the isolation check), so a run never touches production data. Nothing deletes these test collections afterward — drop them manually if you want a clean slate (`memory_bank_project-agent-memory-test*` in Qdrant, or the matching rows in Postgres' `memory_points`/`memory_collections`).
 
-This test suite covers all 35 MCP tools organized into the following categories:
-
-### Core Memory Operations (3 tools)
-- `log_memory` - Store memory entries
-- `query_memory` - Query memory by type
-- `query_memory_summarized` - Query memory with summarization
-
-### Decision Logging (3 tools)
-- `log_decision` - Log architectural decisions
-- `get_decisions` - Retrieve decisions
-- `search_decisions_fts` - Full-text search decisions
-
-### Progress Tracking (4 tools)
-- `log_progress` - Log project milestones
-- `get_progress_with_status` - Get progress by status
-- `update_progress_with_status` - Update progress status
-- `search_progress_entries` - Search progress entries
-
-### Context Management (5 tools)
-- `get_product_context` - Get product context
-- `update_product_context` - Update product context
-- `get_active_context` - Get active context
-- `update_active_context` - Update active context
-- `get_context_history` - Get context history
-
-### System Patterns (3 tools)
-- `get_system_patterns` - Get system patterns
-- `update_system_patterns` - Update system patterns
-- `search_system_patterns` - Search system patterns
-
-### Knowledge Links (2 tools)
-- `create_knowledge_link` - Create links between memories
-- `get_knowledge_links` - Get knowledge links
-
-### Semantic Search (1 tool)
-- `semantic_search` - Perform semantic search
-
-### Text Summarization (1 tool)
-- `summarize_text` - Summarize text content
-
-### Custom Data Operations (5 tools)
-- `store_custom_data` - Store custom key-value data
-- `get_custom_data` - Get custom data by key
-- `query_custom_data` - Query custom data
-- `search_custom_data` - Search custom data
-- `update_custom_data` - Update custom data
-
-### Batch Operations (3 tools)
-- `batch_log_memory` - Batch log memory entries
-- `batch_query_memory` - Batch query memory
-- `batch_update_context` - Batch update context
-
-### Workspace Management (2 tools)
-- `initialize_workspace` - Initialize new workspace
-- `sync_memory` - Sync memory data
-
-### Import/Export (2 tools)
-- `export_memory_to_markdown` - Export to markdown
-- `import_memory_from_markdown` - Import from markdown
-
-### Conversation Analysis (1 tool)
-- `analyze_conversation` - Analyze conversation patterns
-
-## Running Tests
-
-### Prerequisites
-
-Make sure you have the following installed:
-- Node.js 18+ 
-- TypeScript 5+
-- Jest and ts-jest
-
-Install dependencies:
-```bash
-npm install
-```
-
-### Run All Tests
+## Running
 
 ```bash
+npm run build
 npm test
 ```
 
-### Run Tests with Coverage
+`npm test` runs Jest, which spawns `dist/index.js`, so a build must exist first. The suite reads the same `.env` the server would (via the server's own `dotenv/config`), with `VECTOR_DIM`, `EMBEDDING_PROVIDER`, and `EMBEDDING_MODEL` pinned in `tests/all-tools.test.ts` to `768` / `onnx` / `nomic-ai/nomic-embed-text-v1.5` so results are deterministic regardless of local `.env` overrides.
 
-```bash
-npm test -- --coverage
-```
+### Against Qdrant (default)
 
-### Run Specific Test Suite
+Set `QDRANT_URL` (and `QDRANT_API_KEY` if needed) in `.env`, `MEMORY_BACKEND=qdrant` or unset, then `npm test`.
 
-```bash
-npm test -- all-tools.test.ts
-```
+### Against Postgres/pgvector
 
-### Run Tests in Watch Mode
+Set `MEMORY_BACKEND=postgres` and `POSTGRES_URL`/`POSTGRES_PASSWORD` in `.env`, then `npm test`. Schema is created automatically on first connect.
 
-```bash
-npm test -- --watch
-```
+To run both in one session, edit `.env` between runs (or export the vars inline before `npm test`) — there's no dual-backend test runner, since the point is to verify the two backends behave identically under one shared suite.
 
-## Test Configuration
+## What is covered
 
-Tests are configured in `jest.config.js` with the following settings:
-- **Test Environment**: Node.js
-- **Module System**: ESM (ECMAScript Modules)
-- **Test Timeout**: 30 seconds (to accommodate MCP server initialization)
-- **Coverage**: Tracks coverage for all `src/**/*.ts` files
+- `tools/list` — exact 7-tool surface, no leftover v2 names.
+- `memory_create` — single item, batch order preservation, explicit-id idempotency and update-by-external-id, rejection of an unknown `memory_type`.
+- `memory_read` — semantic search (relevance + score range), `memory_type` filter, `limit`, list mode (no `query_text`, recency order), batched queries, `metadata_filter` on a scalar and on an array (any-match).
+- `memory_update` — content replacement (re-embeds), metadata shallow merge (preserves untouched keys), batch update.
+- `memory_context` — initial shape, patch-and-read-back in one call, second patch merges shallowly over the first, previous version written to `contextHistory`.
+- `memory_graph` — `link` creates edges, `neighbors` at depth 1 vs depth 2, `direction: incoming` restricts traversal, `unlink` removes edges without deleting nodes.
+- `memory_admin` — `export` produces markdown, `export → import → export` round-trips without data loss, importing foreign (non-exported) markdown reports errors instead of throwing.
+- Project isolation — a second project name never sees another project's rows.
+- `memory_delete` — deleting an unknown id is a no-op, deleting a real id removes it from subsequent reads.
 
-## Environment Setup
+This mirrors the 30-check manual stdio driver used during v3 development (`scratchpad/run-tools.mjs`, not part of the repo) — that driver was the spec this suite was ported from.
 
-Before running tests, ensure your `.env` file is properly configured:
+## Notes
 
-```env
-# Qdrant Configuration
-QDRANT_URL=https://qdrant.geekscodebase.me
-QDRANT_API_KEY=your-api-key
-DEFAULT_TOP_K_MEMORY_QUERY=3
-
-# Embedding Configuration
-EMBEDDING_PROVIDER=openrouter
-EMBEDDING_MODEL=qwen/qwen3-embedding-8b
-
-# Summarizer Configuration
-SUMMARIZER_PROVIDER=openrouter
-SUMMARIZER_MODEL=openai/gpt-oss-20b:free
-
-# Provider API Keys
-OPENROUTER_API_KEY=your-openrouter-key
-GEMINI_API_KEY=your-gemini-key
-OLLAMA_API_URL=http://localhost:11434
-OLLAMA_API_KEY=
-```
-
-## Test Architecture
-
-The test suite uses the MCP SDK client to connect to the server and test each tool:
-
-1. **Setup**: Initializes MCP client and connects to the server
-2. **Test Execution**: Calls each tool with appropriate test data
-3. **Assertions**: Validates tool responses
-4. **Teardown**: Closes client connection
-
-## Logging
-
-All application logs use `console.error()` which outputs to **stderr**. This ensures that:
-- Logs don't interfere with MCP protocol communication on stdout
-- Logs are visible in production environments
-- Test output remains clean and readable
-
-## Adding New Tests
-
-When adding new MCP tools, update `tests/all-tools.test.ts`:
-
-1. Add a new test in the appropriate category
-2. Use the `client.callTool()` method with proper arguments
-3. Add assertions to validate the response
-4. Update this README with the new tool
-
-## Troubleshooting
-
-### Tests Timeout
-- Increase the timeout in `jest.config.js` if needed
-- Check if Qdrant is accessible at the configured URL
-
-### Connection Errors
-- Verify `.env` configuration
-- Ensure the server builds successfully: `npm run build`
-- Check Qdrant service status
-
-### Failed Tool Calls
-- Review tool arguments match the Zod schema in `src/index.ts`
-- Check stderr logs for detailed error messages
-- Verify API keys are valid
-
-## Archived Tests
-
-Previous JavaScript tests are preserved in `tests_backup_js/`:
-- `simple-test.js`
-- `test-error-handling-units.js`
-- `test-gemini-error-handling.js`
-- `test-memory-access.js`
-
-These are kept for reference but are no longer actively maintained.
+- Tests run sequentially within each `describe` block and share state (ids created by earlier tests are read by later ones), matching how the tools are actually used. Don't run individual `it()`s out of order with `.only` unless you also stub the state they depend on.

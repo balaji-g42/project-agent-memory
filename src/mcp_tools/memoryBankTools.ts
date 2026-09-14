@@ -1,6 +1,5 @@
 import { initMemoryBank, client } from "../init.js";
-import { v4 as uuidv4 } from "uuid";
-import config from "../config.js";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { embeddingCache, queryCache, contextCache, patternCache, cacheKeys, cacheUtils } from "../cache.js";
 import type { 
     MemoryType, 
@@ -9,37 +8,12 @@ import type {
     BatchContextUpdate,
     WorkspaceInfo,
     SyncSource,
-    ConversationMetadata,
     ProgressStatus,
     Priority,
     LinkDirection
 } from "../types.js";
 
-// Embedding providers
-import FastEmbedProvider from "../embeddings/fastEmbed.js";
-import OllamaProvider from "../embeddings/ollama.js";
-import GeminiVertexProvider from "../embeddings/geminiVertex.js";
-
-// Type definitions for embedding provider
-interface EmbeddingProvider {
-    embedTexts(texts: string[]): Promise<number[][]>;
-}
-
-// Lazy load embedding provider - correct priority: Gemini > Ollama > FastEmbed
-// OPENROUTER_API_KEY only affects summarization, not embeddings
-let embeddingProvider: EmbeddingProvider | undefined;
-function getEmbeddingProvider(): EmbeddingProvider {
-    if (!embeddingProvider) {
-        if (config.GEMINI_API_KEY) {
-            embeddingProvider = new GeminiVertexProvider();
-        } else if (process.env.OLLAMA_BASE_URL) {
-            embeddingProvider = new OllamaProvider();
-        } else {
-            embeddingProvider = new FastEmbedProvider();
-        }
-    }
-    return embeddingProvider;
-}
+import { getEmbeddingProvider } from "../embeddings.js";
 
 /**
  * Cached embedding generation with performance optimization
@@ -80,7 +54,7 @@ async function getCachedEmbeddings(texts: string[]): Promise<number[][]> {
     return results;
 }
 
-const MEMORY_TYPES: MemoryType[] = ["productContext", "activeContext", "systemPatterns", "decisionLog", "progress", "contextHistory", "customData"];
+const MEMORY_TYPES: MemoryType[] = ["productContext", "activeContext", "systemPatterns", "decisionLog", "progress", "contextHistory", "customData", "knowledgeLink"];
 
 // Context structured context types
 const STRUCTURED_CONTEXT_TYPES: ("productContext" | "activeContext")[] = ["productContext", "activeContext"];
@@ -96,6 +70,22 @@ interface QueryResult {
     content: string;
     type: string;
     timestamp: string;
+    metadata: Record<string, any>;
+}
+
+interface GraphEdgeInput {
+    from_id: string;
+    to_id: string;
+    relation: string;
+    description?: string;
+}
+
+interface NeighborResult {
+    id: string;
+    depth: number;
+    via: string;
+    content: string;
+    type: string;
 }
 
 interface DecisionResult {
@@ -125,8 +115,6 @@ interface KnowledgeLink {
 interface ContextHistoryEntry {
     id: string | number;
     contextType: string;
-    previousVersion: any;
-    newVersion: any;
     changes: Record<string, any>;
     timestamp: string;
     pointId: string;
@@ -213,24 +201,6 @@ interface ImportResult {
     timestamp: string;
 }
 
-interface AnalysisDecision {
-    content: string;
-    confidence: number;
-}
-
-interface AnalysisProgress {
-    content: string;
-    status: string;
-}
-
-interface AnalysisResults {
-    decisions: AnalysisDecision[];
-    progress: AnalysisProgress[];
-    questions: string[];
-    insights: string[];
-    timestamp: string;
-}
-
 interface CacheStats {
     embeddingCache: {
         size: number;
@@ -251,7 +221,7 @@ interface CacheStats {
 }
 
 // ----- Log memory entry -----
-async function logMemory(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null): Promise<string> {
+async function logMemory(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null, metadata: Record<string, any> = {}): Promise<string> {
     if (!MEMORY_TYPES.includes(memoryType)) {
         throw new Error(`Invalid memory type: ${memoryType}`);
     }
@@ -262,7 +232,7 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
     const vectors = await getCachedEmbeddings([content]);
     const vector = vectors[0];
 
-    const pointId = topLevelId || uuidv4();
+    const pointId = topLevelId ? toPointId(topLevelId) : uuidv4();
 
     const point = {
         id: pointId,
@@ -270,12 +240,13 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
         payload: {
             type: memoryType,
             content,
+            metadata,
             timestamp: new Date().toISOString(),
             project: projectName
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
 
     // Invalidate relevant caches
     cacheUtils.invalidateProjectCache(projectName);
@@ -284,9 +255,18 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
 }
 
 // ----- Query memory -----
-async function queryMemory(projectName: string, queryText: string, memoryType: string | null = null, topK: number = 5): Promise<QueryResult[]> {
+function metadataFilterClauses(metadataFilter: Record<string, any> | null): any[] {
+    if (!metadataFilter) return [];
+    return Object.entries(metadataFilter).map(([key, value]) => (
+        Array.isArray(value)
+            ? { key: `metadata.${key}`, match: { any: value } }
+            : { key: `metadata.${key}`, match: { value } }
+    ));
+}
+
+async function queryMemory(projectName: string, queryText: string, memoryType: string | null = null, topK: number = 5, metadataFilter: Record<string, any> | null = null): Promise<QueryResult[]> {
     // Check cache first
-    const cacheKey = cacheKeys.query(projectName, queryText, memoryType || undefined, topK);
+    const cacheKey = cacheKeys.query(projectName, queryText, memoryType || undefined, topK) + (metadataFilter ? `:${JSON.stringify(metadataFilter)}` : "");
     const cachedResult = cacheUtils.getCached(queryCache, cacheKey);
     if (cachedResult) {
         return cachedResult;
@@ -301,6 +281,7 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
     // Build filter
     const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
     if (memoryType) mustFilter.push({ key: "type", match: { value: memoryType } });
+    mustFilter.push(...metadataFilterClauses(metadataFilter));
 
     const results = await client.search(collectionName, {
         vector,
@@ -313,7 +294,8 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
         score: hit.score,
         content: hit.payload?.content,
         type: hit.payload?.type,
-        timestamp: hit.payload?.timestamp
+        timestamp: hit.payload?.timestamp,
+        metadata: hit.payload?.metadata ?? {}
     }));
 
     // Cache the results
@@ -322,7 +304,105 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
     return formattedResults;
 }
 
+async function listMemory(projectName: string, memoryType: string | null = null, limit: number = 20, metadataFilter: Record<string, any> | null = null): Promise<QueryResult[]> {
+    const collectionName = await initMemoryBank(projectName);
+
+    const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
+    if (memoryType) mustFilter.push({ key: "type", match: { value: memoryType } });
+    mustFilter.push(...metadataFilterClauses(metadataFilter));
+
+    const response = await client.scroll(collectionName, {
+        filter: { must: mustFilter },
+        limit,
+        with_payload: true,
+        with_vector: false
+    });
+
+    return response.points
+        .map((point: any) => ({
+            id: point.id,
+            score: 0,
+            content: point.payload?.content,
+            type: point.payload?.type,
+            timestamp: point.payload?.timestamp,
+            metadata: point.payload?.metadata ?? {}
+        }))
+        .sort((a: QueryResult, b: QueryResult) => String(b.timestamp).localeCompare(String(a.timestamp)));
+}
+
+async function updateMemory(projectName: string, memoryId: string, content?: string, metadata?: Record<string, any>): Promise<boolean> {
+    const collectionName = await initMemoryBank(projectName);
+
+    const pointId = toPointId(memoryId);
+    const existing = await client.retrieve(collectionName, { ids: [pointId], with_payload: true, with_vector: true });
+    if (existing.length === 0) {
+        throw new Error(`Memory ${memoryId} not found in project ${projectName}`);
+    }
+
+    const previous = existing[0];
+    const nextContent = content ?? String(previous.payload?.content ?? "");
+    const vector = content !== undefined
+        ? (await getCachedEmbeddings([content]))[0]
+        : previous.vector as number[];
+
+    const nextMetadata = metadata
+        ? { ...(previous.payload?.metadata as Record<string, any> ?? {}), ...metadata }
+        : previous.payload?.metadata ?? {};
+
+    await client.upsert(collectionName, {
+        wait: true,
+        points: [{
+            id: pointId,
+            vector,
+            payload: {
+                ...previous.payload,
+                content: nextContent,
+                metadata: nextMetadata,
+                timestamp: new Date().toISOString()
+            }
+        }]
+    });
+
+    cacheUtils.invalidateProjectCache(projectName);
+    return true;
+}
+
+async function deleteMemory(projectName: string, memoryIds: string[]): Promise<number> {
+    const collectionName = await initMemoryBank(projectName);
+
+    const existing = await client.retrieve(collectionName, { ids: memoryIds.map(toPointId), with_payload: false });
+    if (existing.length === 0) {
+        return 0;
+    }
+
+    await client.delete(collectionName, { wait: true, points: existing.map((point: { id: string | number }) => point.id) });
+    cacheUtils.invalidateProjectCache(projectName);
+    return existing.length;
+}
+
+async function deleteCollection(projectName: string): Promise<boolean> {
+    const collectionName = `memory_bank_${projectName}`;
+    const result = await client.deleteCollection(collectionName);
+    cacheUtils.invalidateProjectCache(projectName);
+    return result;
+}
+
 // ----- Log structured memory entry (for ConPort contexts) -----
+const STRUCTURED_CONTEXT_NAMESPACE = "6f9b6c1e-4c4e-5a2f-9a7c-0d1f2e3a4b5c";
+const EXTERNAL_ID_NAMESPACE = "1b4d7c8a-9e2f-5b3c-8d6a-7f0e1c2b3a4d";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function toPointId(externalId: string): string {
+    if (UUID_RE.test(externalId)) return externalId;
+    if (/^\d+$/.test(externalId)) return externalId;
+    return uuidv5(externalId, EXTERNAL_ID_NAMESPACE);
+}
+
+function structuredContextId(projectName: string, contextType: string): string {
+    return uuidv5(`${projectName}:${contextType}`, STRUCTURED_CONTEXT_NAMESPACE);
+}
+
 async function logStructuredMemory(projectName: string, contextType: "productContext" | "activeContext", content: string | Record<string, any>, topLevelId: string | null = null): Promise<string> {
     if (!STRUCTURED_CONTEXT_TYPES.includes(contextType)) {
         throw new Error(`Invalid structured context type: ${contextType}`);
@@ -334,7 +414,7 @@ async function logStructuredMemory(projectName: string, contextType: "productCon
     const contentString = typeof content === 'string' ? content : JSON.stringify(content);
     const vector = (await getEmbeddingProvider().embedTexts([contentString]))[0];
 
-    const pointId = topLevelId || uuidv4();
+    const pointId = topLevelId || structuredContextId(projectName, contextType);
 
     const point = {
         id: pointId,
@@ -348,7 +428,8 @@ async function logStructuredMemory(projectName: string, contextType: "productCon
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
+    contextCache.getCache().delete(cacheKeys.structuredContext(projectName, contextType));
     return pointId;
 }
 
@@ -368,19 +449,27 @@ async function getStructuredContext(projectName: string, contextType: "productCo
     const collectionName = `memory_bank_${projectName}`;
 
     // Get the most recent entry for this context type
-    const results = await client.search(collectionName, {
-        vector: (await getCachedEmbeddings([`context type: ${contextType}`]))[0], // meaningful vector for context type
-        limit: 1,
-        filter: {
-            must: [
-                { key: "project", match: { value: projectName } },
-                { key: "type", match: { value: contextType } },
-                { key: "structured", match: { value: true } }
-            ]
-        },
+    let results: Array<{ payload?: Record<string, any> | null }> = await client.retrieve(collectionName, {
+        ids: [structuredContextId(projectName, contextType)],
         with_payload: true,
         with_vector: false
     });
+
+    if (results.length === 0) {
+        results = await client.search(collectionName, {
+            vector: (await getCachedEmbeddings([`context type: ${contextType}`]))[0],
+            limit: 1,
+            filter: {
+                must: [
+                    { key: "project", match: { value: projectName } },
+                    { key: "type", match: { value: contextType } },
+                    { key: "structured", match: { value: true } }
+                ]
+            },
+            with_payload: true,
+            with_vector: false
+        });
+    }
 
     let contextResult: Record<string, any>;
     if (results.length === 0) {
@@ -425,8 +514,6 @@ async function updateStructuredContext(projectName: string, contextType: "produc
     // Store history entry
     const historyEntry = {
         contextType,
-        previousVersion: currentContext,
-        newVersion: updatedContext,
         changes: patchContent,
         timestamp: new Date().toISOString(),
         pointId
@@ -523,89 +610,132 @@ async function semanticSearch(projectName: string, queryText: string, limit: num
 }
 
 // ----- Knowledge graph linking -----
-async function createKnowledgeLink(projectName: string, sourceId: string, targetId: string, linkType: string, description: string = ""): Promise<string> {
+const MAX_GRAPH_EDGES = 10000;
+
+async function createKnowledgeLink(projectName: string, edges: GraphEdgeInput[]): Promise<KnowledgeLink[]> {
     const collectionName = await initMemoryBank(projectName);
 
-    const linkContent = {
-        sourceId,
-        targetId,
-        linkType,
-        description,
-        timestamp: new Date().toISOString()
-    };
+    const timestamp = new Date().toISOString();
+    const contents = edges.map(edge =>
+        edge.description || `${edge.from_id} ${edge.relation} ${edge.to_id}`
+    );
+    const vectors = await getCachedEmbeddings(contents);
 
-    const contentString = JSON.stringify(linkContent);
-    const vector = (await getEmbeddingProvider().embedTexts([contentString]))[0];
-
-    const pointId = uuidv4();
-
-    const point = {
-        id: pointId,
-        vector,
+    const points = edges.map((edge, i) => ({
+        id: uuidv4(),
+        vector: vectors[i],
         payload: {
             type: "knowledgeLink",
-            content: contentString,
-            sourceId,
-            targetId,
-            linkType,
-            description,
-            timestamp: new Date().toISOString(),
+            content: contents[i],
+            metadata: {
+                sourceId: toPointId(edge.from_id),
+                targetId: toPointId(edge.to_id),
+                linkType: edge.relation
+            },
+            timestamp,
             project: projectName
         }
-    };
+    }));
 
-    await client.upsert(collectionName, { points: [point] });
-    return pointId;
+    await client.upsert(collectionName, { wait: true, points });
+    cacheUtils.invalidateProjectCache(projectName);
+
+    return points.map(point => ({
+        id: point.id,
+        sourceId: point.payload.metadata.sourceId,
+        targetId: point.payload.metadata.targetId,
+        linkType: point.payload.metadata.linkType,
+        description: point.payload.content,
+        timestamp
+    }));
+}
+
+async function getAllKnowledgeLinks(projectName: string, linkType: string | null = null): Promise<KnowledgeLink[]> {
+    const collectionName = await initMemoryBank(projectName);
+
+    const mustFilter: any[] = [
+        { key: "project", match: { value: projectName } },
+        { key: "type", match: { value: "knowledgeLink" } }
+    ];
+    if (linkType) mustFilter.push({ key: "metadata.linkType", match: { value: linkType } });
+
+    const response = await client.scroll(collectionName, {
+        filter: { must: mustFilter },
+        limit: MAX_GRAPH_EDGES,
+        with_payload: true,
+        with_vector: false
+    });
+
+    return response.points.map((point: any) => ({
+        id: point.id,
+        sourceId: point.payload?.metadata?.sourceId,
+        targetId: point.payload?.metadata?.targetId,
+        linkType: point.payload?.metadata?.linkType,
+        description: point.payload?.content,
+        timestamp: point.payload?.timestamp
+    }));
 }
 
 async function getKnowledgeLinks(projectName: string, entityId: string, linkType: string | null = null, direction: LinkDirection = "both"): Promise<KnowledgeLink[]> {
-    const collectionName = `memory_bank_${projectName}`;
+    const links = await getAllKnowledgeLinks(projectName, linkType);
+    const nodeId = toPointId(entityId);
+    return links.filter(link =>
+        (direction !== "incoming" && link.sourceId === nodeId) ||
+        (direction !== "outgoing" && link.targetId === nodeId)
+    );
+}
 
-    try {
-        // First, check if collection exists and get basic knowledge links
-        const basicFilter: any = {
-            must: [
-                { key: "project", match: { value: projectName } },
-                { key: "type", match: { value: "knowledgeLink" } }
-            ]
-        };
+async function getNeighbors(projectName: string, entityId: string, linkType: string | null = null, depth: number = 1, direction: LinkDirection = "both"): Promise<NeighborResult[]> {
+    const links = await getAllKnowledgeLinks(projectName, linkType);
 
-        if (linkType) {
-            basicFilter.must.push({ key: "linkType", match: { value: linkType } });
+    const nodeId = toPointId(entityId);
+    const reached = new Map<string, { depth: number; via: string }>();
+    let frontier = [nodeId];
+    const seen = new Set<string>([nodeId]);
+
+    for (let level = 1; level <= depth && frontier.length > 0; level++) {
+        const next: string[] = [];
+        for (const link of links) {
+            const hops: [string, string][] = [];
+            if (direction !== "incoming" && frontier.includes(link.sourceId)) {
+                hops.push([link.targetId, link.linkType]);
+            }
+            if (direction !== "outgoing" && frontier.includes(link.targetId)) {
+                hops.push([link.sourceId, link.linkType]);
+            }
+            for (const [id, relation] of hops) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+                reached.set(id, { depth: level, via: relation });
+                next.push(id);
+            }
         }
-
-        // Get all knowledge links first
-        const allLinks = await client.search(collectionName, {
-            vector: (await getEmbeddingProvider().embedTexts(["knowledge links"]))[0],
-            limit: 100, // Get more to filter client-side
-            filter: basicFilter
-        });
-
-        // Filter client-side based on entityId and direction
-        const filteredResults = allLinks.filter((hit: any) => {
-            const payload = hit.payload;
-            if (direction === "outgoing" || direction === "both") {
-                if (payload?.sourceId === entityId) return true;
-            }
-            if (direction === "incoming" || direction === "both") {
-                if (payload?.targetId === entityId) return true;
-            }
-            return false;
-        });
-
-        return filteredResults.map((hit: any) => ({
-            id: hit.id,
-            sourceId: hit.payload?.sourceId,
-            targetId: hit.payload?.targetId,
-            linkType: hit.payload?.linkType,
-            description: hit.payload?.description,
-            timestamp: hit.payload?.timestamp
-        }));
-    } catch (error) {
-        // Fallback: return empty array on error
-        console.error("Error in getKnowledgeLinks:", error);
-        return [];
+        frontier = next;
     }
+
+    if (reached.size === 0) return [];
+
+    const collectionName = await initMemoryBank(projectName);
+    const points = await client.retrieve(collectionName, {
+        ids: [...reached.keys()],
+        with_payload: true,
+        with_vector: false
+    });
+
+    return points.map((point: any) => ({
+        id: String(point.id),
+        depth: reached.get(String(point.id))!.depth,
+        via: reached.get(String(point.id))!.via,
+        content: point.payload?.content,
+        type: point.payload?.type
+    })).sort((a: { depth: number }, b: { depth: number }) => a.depth - b.depth);
+}
+
+async function deleteKnowledgeLinks(projectName: string, linkIds: string[]): Promise<number> {
+    const collectionName = await initMemoryBank(projectName);
+    await client.delete(collectionName, { points: linkIds });
+    cacheUtils.invalidateProjectCache(projectName);
+    return linkIds.length;
 }
 
 // ----- Get context history -----
@@ -634,8 +764,6 @@ async function getContextHistory(projectName: string, contextType: "productConte
             return {
                 id: hit.id,
                 contextType: historyData.contextType,
-                previousVersion: historyData.previousVersion,
-                newVersion: historyData.newVersion,
                 changes: historyData.changes,
                 timestamp: historyData.timestamp,
                 pointId: historyData.pointId
@@ -674,7 +802,7 @@ async function batchLogMemory(projectName: string, entries: BatchLogEntry[]): Pr
 
     // Create points
     entries.forEach((entry, index) => {
-        const pointId = entry.topLevelId || uuidv4();
+        const pointId = entry.topLevelId ? toPointId(entry.topLevelId) : uuidv4();
         const point = {
             id: pointId,
             vector: vectors[index][0],
@@ -688,7 +816,7 @@ async function batchLogMemory(projectName: string, entries: BatchLogEntry[]): Pr
         points.push(point);
     });
 
-    await client.upsert(collectionName, { points });
+    await client.upsert(collectionName, { wait: true, points });
     return points.map(point => point.id);
 }
 
@@ -727,7 +855,8 @@ async function batchQueryMemory(projectName: string, queries: BatchQuery[]): Pro
                 score: hit.score,
                 content: hit.payload?.content,
                 type: hit.payload?.type,
-                timestamp: hit.payload?.timestamp
+                timestamp: hit.payload?.timestamp,
+                metadata: hit.payload?.metadata ?? {}
             }));
         });
 
@@ -835,7 +964,7 @@ async function updateSystemPatterns(projectName: string, patterns: string[]): Pr
             }
         };
 
-        await client.upsert(collectionName, { points: [point] });
+        await client.upsert(collectionName, { wait: true, points: [point] });
         ids.push(pointId);
     }
 
@@ -943,7 +1072,7 @@ async function updateProgressWithStatus(projectName: string, content: string, st
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
     return pointId;
 }
 
@@ -1017,7 +1146,7 @@ async function storeCustomData(projectName: string, data: any, dataType: string,
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
     return pointId;
 }
 
@@ -1177,7 +1306,7 @@ async function updateCustomData(projectName: string, dataId: string, newData: an
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
     return true;
 }
 
@@ -1217,7 +1346,7 @@ async function initializeWorkspace(projectName: string, workspaceInfo: Workspace
             }
         };
 
-        await client.upsert(collectionName, { points: [point] });
+        await client.upsert(collectionName, { wait: true, points: [point] });
 
         // Initialize basic memory contexts if they don't exist
         await initializeBasicContexts(projectName);
@@ -1483,23 +1612,37 @@ async function importMemoryFromMarkdown(projectName: string, markdownContent: st
         timestamp: new Date().toISOString()
     };
 
+    let parsedData: { sections: Record<string, Array<{ heading: string; content: string }>> };
     try {
-        const parsedData = parseMarkdownToMemory(markdownContent);
+        parsedData = parseMarkdownToMemory(markdownContent);
+    } catch (error) {
+        importResults.errors.push((error as Error).message);
+        return importResults;
+    }
 
-        for (const [type, entries] of Object.entries(parsedData.sections)) {
+    for (const [type, entries] of Object.entries(parsedData.sections)) {
+        if (!ALL_MEMORY_TYPES.includes(type as MemoryType)) {
+            importResults.errors.push(`Unknown section, skipped: ${type}`);
+            continue;
+        }
+
+        try {
             if (STRUCTURED_CONTEXT_TYPES.includes(type as any)) {
-                await logStructuredMemory(projectName, type as "productContext" | "activeContext", entries);
+                const context = entriesToStructuredObject(entries);
+                if (Object.keys(context).length === 0) continue;
+                await updateStructuredContext(projectName, type as "productContext" | "activeContext", context);
                 importResults.imported++;
             } else {
-                // Import as regular memory entries
-                for (const entry of entries as any[]) {
-                    await logMemory(projectName, type as MemoryType, entry.content);
+                for (const entry of entries) {
+                    const content = entry.content.replace(/\n?\*[^*\n]*\*$/, '').trim();
+                    if (!content) continue;
+                    await logMemory(projectName, type as MemoryType, content);
                     importResults.imported++;
                 }
             }
+        } catch (error) {
+            importResults.errors.push(`${type}: ${(error as Error).message}`);
         }
-    } catch (error) {
-        importResults.errors.push((error as Error).message);
     }
 
     return importResults;
@@ -1547,124 +1690,57 @@ function convertToMarkdown(exportData: ExportData): string {
  * @param markdown - Markdown content
  * @returns Parsed memory data
  */
-function parseMarkdownToMemory(markdown: string): { sections: Record<string, any> } {
-    // Simple markdown parser - would need more sophisticated parsing for complex structures
-    const sections: Record<string, any> = {};
+const ALL_MEMORY_TYPES: MemoryType[] = [
+    "productContext",
+    "activeContext",
+    "systemPatterns",
+    "decisionLog",
+    "progress",
+    "contextHistory",
+    "customData"
+];
+
+function canonicalMemoryType(heading: string): MemoryType | null {
+    const normalized = heading.trim().toLowerCase().replace(/\s+/g, '');
+    return ALL_MEMORY_TYPES.find(t => t.toLowerCase() === normalized) ?? null;
+}
+
+function parseMarkdownToMemory(markdown: string): { sections: Record<string, Array<{ heading: string; content: string }>> } {
+    const sections: Record<string, Array<{ heading: string; content: string }>> = {};
     const lines = markdown.split('\n');
     let currentSection: string | null = null;
-    let currentEntry: any = null;
+    let currentEntry: { heading: string; content: string } | null = null;
 
     for (const line of lines) {
         if (line.startsWith('## ')) {
-            currentSection = line.substring(3).toLowerCase().replace(/\s+/g, '');
+            const type = canonicalMemoryType(line.substring(3));
+            currentSection = type ?? line.substring(3).trim();
+            currentEntry = null;
             sections[currentSection] = [];
         } else if (line.startsWith('### ') && currentSection) {
-            currentEntry = {};
+            currentEntry = { heading: line.substring(4).trim(), content: '' };
             sections[currentSection].push(currentEntry);
         } else if (currentEntry && line.trim()) {
-            if (!currentEntry.content) {
-                currentEntry.content = line;
-            } else {
-                currentEntry.content += '\n' + line;
-            }
+            currentEntry.content = currentEntry.content
+                ? currentEntry.content + '\n' + line
+                : line;
         }
     }
 
     return { sections };
 }
 
-/**
- * Analyze conversation and automatically log relevant information
- * @param projectName - Name of the project
- * @param conversationText - Conversation text to analyze
- * @param metadata - Additional metadata about the conversation
- * @returns Analysis results
- */
-async function analyzeConversation(projectName: string, conversationText: string, metadata: ConversationMetadata = {}): Promise<AnalysisResults> {
-    const analysisResults: AnalysisResults = {
-        decisions: [],
-        progress: [],
-        questions: [],
-        insights: [],
-        timestamp: new Date().toISOString()
-    };
-
-    // Simple pattern matching for conversation analysis
-    const lines = conversationText.split('\n');
-
-    for (const line of lines) {
-        const lowerLine = line.toLowerCase();
-
-        // Detect decisions
-        if (lowerLine.includes('decided') || lowerLine.includes('decision') || lowerLine.includes('will')) {
-            analysisResults.decisions.push({
-                content: line.trim(),
-                confidence: 0.8
-            });
-        }
-
-        // Detect progress updates
-        if (lowerLine.includes('completed') || lowerLine.includes('finished') || lowerLine.includes('done')) {
-            analysisResults.progress.push({
-                content: line.trim(),
-                status: 'completed'
-            });
-        }
-
-        // Detect questions
-        if (line.includes('?') || lowerLine.includes('what') || lowerLine.includes('how') || lowerLine.includes('why')) {
-            analysisResults.questions.push(line.trim());
-        }
-
-        // Detect insights or important information
-        if (lowerLine.includes('important') || lowerLine.includes('note') || lowerLine.includes('remember')) {
-            analysisResults.insights.push(line.trim());
+function entriesToStructuredObject(entries: Array<{ heading: string; content: string }>): Record<string, any> {
+    const result: Record<string, any> = {};
+    for (const entry of entries) {
+        const lines = entry.content.split('\n').filter(l => l.trim());
+        if (lines.length > 0 && lines.every(l => l.trimStart().startsWith('- '))) {
+            result[entry.heading] = lines.map(l => l.trimStart().slice(2));
+        } else {
+            result[entry.heading] = entry.content;
         }
     }
-
-    // Log the analysis results
-    const entries: BatchLogEntry[] = [];
-
-    analysisResults.decisions.forEach(decision => {
-        entries.push({
-            memoryType: 'decisionLog',
-            content: decision.content
-        });
-    });
-
-    analysisResults.progress.forEach(progress => {
-        entries.push({
-            memoryType: 'progress',
-            content: progress.content
-        });
-    });
-
-    analysisResults.questions.forEach(question => {
-        entries.push({
-            memoryType: 'activeContext',
-            content: `Question: ${question}`
-        });
-    });
-
-    analysisResults.insights.forEach(insight => {
-        entries.push({
-            memoryType: 'systemPatterns',
-            content: insight
-        });
-    });
-
-    if (entries.length > 0) {
-        await batchLogMemory(projectName, entries);
-    }
-
-    // Store the conversation analysis itself
-    await storeCustomData(projectName, analysisResults, 'conversationAnalysis', {
-        conversationId: metadata.conversationId,
-        participants: metadata.participants,
-        source: metadata.source
-    });
-
-    return analysisResults;
+    return result;
 }
 
 /**
@@ -1678,6 +1754,10 @@ function getCacheStats(): CacheStats {
 export {
     logMemory,
     queryMemory,
+    listMemory,
+    updateMemory,
+    deleteMemory,
+    deleteCollection,
     logStructuredMemory,
     getStructuredContext,
     updateStructuredContext,
@@ -1686,6 +1766,8 @@ export {
     semanticSearch,
     createKnowledgeLink,
     getKnowledgeLinks,
+    getNeighbors,
+    deleteKnowledgeLinks,
     getContextHistory,
     batchLogMemory,
     batchQueryMemory,
@@ -1705,6 +1787,5 @@ export {
     syncMemory,
     exportMemoryToMarkdown,
     importMemoryFromMarkdown,
-    analyzeConversation,
     getCacheStats
 };

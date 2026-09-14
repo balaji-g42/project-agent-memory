@@ -2,7 +2,8 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { v4 as uuidv4 } from "uuid";
 import config from "./config.js";
-import type { MemoryType } from "./types.js";
+import { PrestVectorClient } from "./backends/prest.js";
+import type { MemoryType, VectorClient } from "./types.js";
 
 const MEMORY_TYPES: MemoryType[] = [
     "productContext", 
@@ -21,20 +22,43 @@ const DISTANCE_MAP: Record<string, string> = {
     Dot: "Dot",
 };
 
-const client = new QdrantClient({
-    url: config.QDRANT_URL,
-    port: 443,
-    apiKey: process.env.QDRANT_API_KEY || undefined,
-    // @ts-ignore - checkCompatibility may not be in the types but is valid
-    checkCompatibility: false
-});
+const client: VectorClient = config.MEMORY_BACKEND === "postgres"
+    ? new PrestVectorClient()
+    : new QdrantClient({
+        url: config.QDRANT_URL,
+        port: 443,
+        apiKey: config.QDRANT_API_KEY || undefined,
+        // @ts-ignore - checkCompatibility may not be in the types but is valid
+        checkCompatibility: false
+    }) as unknown as VectorClient;
+
+function readVectorSize(params: unknown): number | undefined {
+    const vectors = (params as { vectors?: unknown })?.vectors;
+    if (!vectors || typeof vectors !== "object") return undefined;
+    const size = (vectors as { size?: unknown }).size;
+    return typeof size === "number" ? size : undefined;
+}
 
 async function initMemoryBank(projectName: string): Promise<string> {
     const collectionName = `memory_bank_${projectName}`;
 
     // Check if collection exists
     const existingCollections = await client.getCollections();
-    const exists = existingCollections.collections.some(c => c.name === collectionName);
+    let exists = existingCollections.collections.some((c: { name: string }) => c.name === collectionName);
+
+    if (exists) {
+        const info = await client.getCollection(collectionName);
+        const currentSize = readVectorSize(info.config?.params);
+        if (currentSize !== undefined && currentSize !== config.VECTOR_DIM) {
+            console.error(
+                `WARNING: collection ${collectionName} has vector size ${currentSize} but VECTOR_DIM=${config.VECTOR_DIM}. ` +
+                `Recreating the collection - all stored memories in it will be permanently deleted. ` +
+                `Set VECTOR_DIM=${currentSize} instead if you want to keep them.`
+            );
+            await client.deleteCollection(collectionName);
+            exists = false;
+        }
+    }
 
     if (!exists) {
         await client.createCollection(collectionName, {
@@ -56,7 +80,7 @@ async function initMemoryBank(projectName: string): Promise<string> {
             }
         }));
 
-        await client.upsert(collectionName, { points });
+        await client.upsert(collectionName, { wait: true, points });
     }
 
     return collectionName;

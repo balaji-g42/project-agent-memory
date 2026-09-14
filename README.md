@@ -1,620 +1,325 @@
-# Memory Qdrant MCP
+# Project Agent Memory
 
-A production-ready TypeScript MCP (Model Context Protocol) server that provides comprehensive memory management capabilities using Qdrant vector database for storing and retrieving project context, decisions, progress, and patterns.
+A TypeScript MCP (Model Context Protocol) server that gives a coding agent persistent project memory - context, decisions, progress and patterns - backed by Qdrant or PostgreSQL/pgvector (via pREST), selected with one environment variable.
 
-## 🚀 Features
+## Features
 
-- **35 MCP Tools**: Full suite of memory and context management operations
-- **TypeScript Implementation**: Type-safe codebase with latest MCP SDK
-- **Multiple Embedding Providers**: OpenRouter, Gemini, Ollama, and FastEmbed support
-- **Intelligent Fallbacks**: Automatic fallback to FastEmbed for embeddings, OpenRouter for summarization
-- **OpenAI SDK Integration**: Standard OpenAI client for OpenRouter API access
-- **Vector Search**: Semantic search through memory entries using embeddings
-- **Performance Optimization**: Connection pooling, LRU caching, and cache invalidation
-- **Comprehensive Testing**: Jest test suite with 35 tool tests
-- **MCP Inspector Support**: Interactive testing and debugging
-- **Import/Export**: Markdown-based memory bank management
-- **Conversation Analysis**: Automatic logging of relevant information from conversations
+- **7 MCP tools**: `memory_create`, `memory_read`, `memory_update`, `memory_delete`, `memory_context`, `memory_graph`, `memory_admin`
+- **Dual storage backend**: `MEMORY_BACKEND=qdrant` (default) or `MEMORY_BACKEND=postgres`, same tool surface either way - no code change to switch, and Qdrant deployments need no env changes to keep working. The `postgres` backend talks to Postgres/pgvector through a [pREST](https://prest.dev) instance, not a direct DB connection - vectors travel over an `X-Vector` header (registered pREST queries can't carry them as URL params without hitting HTTP 414)
+- **Local embeddings by default**: ONNX CPU inference in-process via `@huggingface/transformers`; no embedding service, no API key, nothing leaves the machine except the backend writes
+- **Configurable vector dimension**: `VECTOR_DIM` (default 768), Matryoshka-truncated and re-normalized
+- **Pluggable providers**: `onnx`, `openai` (any OpenAI-compatible endpoint - Ollama, LM Studio, vLLM, LiteLLM, OpenAI itself), `gemini`, `openrouter`
+- **No silent fallbacks**: a failing provider fails the call rather than returning degraded vectors
+- **Runs via `npx`**: no global install, no long-running service
+- **Performance**: connection pooling (`POOL_SIZE`, shared across backends), LRU caches for embeddings and queries, cache invalidation on write
 
-## 📋 Requirements
+## Requirements
 
 - Node.js 18+
-- TypeScript 5+
-- Qdrant vector database (local or cloud)
-- API keys for chosen providers (OpenRouter, Gemini, or Ollama)
+- A reachable Qdrant instance, **or** a PostgreSQL instance with the `vector` (pgvector) extension **and** a [pREST](https://prest.dev) instance in front of it
+- No API key with the default `onnx` provider
 
-## 📦 Installation
+## Install
 
-### Using npx (Recommended)
+Three ways in, most to least automated. All of them still need a reachable Qdrant or Postgres - see [Setup](#setup) below.
+
+### 1. Claude Code plugin (recommended)
+
+Bundles the MCP server, the agent skill, and memory-first session hooks (detects `git commit`, nudges the agent to log it, hard-blocks `Stop` until it does) in one install.
 
 ```bash
-npx memory-qdrant-mcp
+git clone https://github.com/balaji-g42/project-agent-memory
+claude --plugin-dir ./project-agent-memory
 ```
 
-This will download and run the server automatically.
+On first enable, Claude Code prompts for `memory_backend` (`qdrant` or `postgres`) and the matching URL/key via the plugin's `userConfig` - nothing is hardcoded to Qdrant. Validate the manifest any time with `claude plugin validate .`.
 
-### Manual Installation
+Includes: `.mcp.json` (server registration), `skill/` (agent skill), `hooks/` (`SessionStart` / `PostToolUse` / `Stop`), `commands/memory-sync.md` (`/memory-sync`).
+
+### 2. Agent Skill only
+
+Just the "when and how to use these tools" instructions - no hooks, no bundled server registration. Pair it with a manual MCP config (option 3).
+
+- **Claude Code**: copy `skill/*` into `.claude/skills/project-agent-memory/` (project) or `~/.claude/skills/project-agent-memory/` (global)
+- **Claude.ai**: zip `skill/` and upload via Settings → Features → Skills
+
+See [`skill/README.md`](skill/README.md).
+
+### 3. MCP server only (manual)
+
+Register the server yourself - no skill, no hooks.
 
 ```bash
-npm install -g memory-qdrant-mcp
-memory-qdrant-mcp
+npx -y project-agent-memory
 ```
 
-### From Source
+Or from source:
 
 ```bash
-git clone <repository-url>
-cd memory-qdrant-mcp
+git clone https://github.com/balaji-g42/project-agent-memory
+cd project-agent-memory
 npm install
-npm run build  # Compile TypeScript to dist/
+npm run build
 node dist/index.js
 ```
 
-## 🔧 Setup
-
-### 1. Qdrant Database
-
-The server requires a running Qdrant instance.
-
-**Option 1: Simple Docker run**
-```bash
-docker run -p 6333:6333 qdrant/qdrant
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "project-agent-memory"],
+      "env": {
+        "QDRANT_URL": "http://localhost:6333"
+      }
+    }
+  }
+}
 ```
 
-**Option 2: Docker Compose (Recommended for production)**
-Create a `docker-compose.yml` file:
-```yaml
-services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: qdrant
-    restart: unless-stopped
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    environment:
-      QDRANT__SERVICE__CORS: "true"
-    volumes:
-      - qdrant_data:/qdrant/storage
+Client-specific templates are in [`skill/`](skill/): `claude-config.example.json`, `vscode-mcp-config.example.json`, `cursor-config.example.json`.
 
-volumes:
-  qdrant_data:
-    driver: local
-```
+## Setup
 
-Then run:
-```bash
-docker-compose up -d
-```
+### 1. Storage backend
 
-### 2. Environment Configuration
+Pick one. `MEMORY_BACKEND` defaults to `qdrant`, so existing deployments need no changes.
 
-Copy `.env.example` to `.env` and configure:
+#### Qdrant (default)
 
 ```bash
-cp .env.example .env
+docker run -p 6333:6333 -v ./qdrant_storage:/qdrant/storage qdrant/qdrant
 ```
-
-**Configure your `.env` file:**
 
 ```env
-# Qdrant Configuration
-QDRANT_URL=https://localhost:6333
-QDRANT_API_KEY=your_qdrant_api_key_here
-DEFAULT_TOP_K_MEMORY_QUERY=3
+MEMORY_BACKEND=qdrant
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=
+```
 
-# Embedding Configuration
-# Options: openrouter, gemini, ollama, fastembed (default)
-EMBEDDING_PROVIDER=openrouter
-EMBEDDING_MODEL=qwen/qwen3-embedding-8b
+#### PostgreSQL / pgvector (via pREST)
 
-# Summarizer Configuration
-# Options: openrouter (default), gemini, ollama
+`MEMORY_BACKEND=postgres` doesn't connect to Postgres directly - it goes through [pREST](https://prest.dev), which exposes registered SQL queries over HTTP. You need both Postgres (with `vector`) and pREST reachable:
+
+```yaml
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: memory
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  prest:
+    image: prest/prest
+    environment:
+      PREST_PG_HOST: postgres
+      PREST_PG_USER: postgres
+      PREST_PG_PASS: postgres
+      PREST_PG_DATABASE: memory
+      PREST_JWT_KEY: change-me
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+```
+
+```env
+MEMORY_BACKEND=postgres
+PREST_URL=http://localhost:3000
+PREST_JWT_KEY=change-me
+PREST_REGISTER_ADMIN=admin
+PREST_DATABASE=memory
+```
+
+The `vector` extension, both tables (`memory_collections`, `memory_points`) and the registered pREST queries the server calls are created automatically on first connect - no manual migration step. `PREST_JWT_KEY` must match the key pREST's own config was started with (used to sign the admin bearer token for registered-query calls). See [`instructions/migration_plan.md/plan.md`](instructions/migration_plan.md/plan.md) §4 for the schema and design notes. If you have existing data in Qdrant and want to move it into Postgres, see [Migrating Qdrant data into Postgres](#migrating-qdrant-data-into-postgres) below.
+
+### 2. Configuration
+
+Minimum - everything else has a working default:
+
+```env
+QDRANT_URL=http://localhost:6333
+```
+
+Common settings:
+
+```env
+MEMORY_BACKEND=qdrant
+POOL_SIZE=10
+
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=
+
+# postgres backend only
+PREST_URL=http://localhost:3000
+PREST_JWT_KEY=
+PREST_REGISTER_ADMIN=admin
+PREST_DATABASE=memory
+
+VECTOR_DIM=768
+DISTANCE_METRIC=Cosine
+
+EMBEDDING_PROVIDER=onnx
+EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
+ONNX_DTYPE=q8
+
 SUMMARIZER_PROVIDER=openrouter
 SUMMARIZER_MODEL=openai/gpt-oss-20b:free
-
-# Provider API Keys
-OPENROUTER_API_KEY=your_openrouter_key_here
-GEMINI_API_KEY=your_gemini_key_here
-OLLAMA_API_URL=http://localhost:11434
-OLLAMA_API_KEY=
+OPENROUTER_API_KEY=
 ```
 
-### Provider Selection
-
-**OpenRouter (Recommended)**
-- Best for embeddings: `qwen/qwen3-embedding-8b`
-- Best for summarization: `openai/gpt-oss-20b:free`
-- Requires API key from [openrouter.ai](https://openrouter.ai)
-- Uses OpenAI SDK with proper headers
-
-**Gemini**
-- Good for both embeddings and summarization
-- Free tier available
-- Get API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
-
-**Ollama**
-- Local, free, privacy-focused
-- Requires Ollama running locally
-- Supports cloud Ollama with API key
-- Models: `nomic-embed-text:v1.5` (embedding), `llama2` (summarization)
-
-**FastEmbed (Fallback)**
-- Local embeddings
-- No API key required
-- Used as automatic fallback when other providers fail
-
-## 🔌 MCP Configuration
-
-### For VSCode GitHub Copilot
-
-Create or update the MCP settings file at:
-- **Windows**: `%APPDATA%\Code\User\globalStorage\github.copilot-chat\settings\mcp.json`
-- **macOS**: `~/Library/Application Support/Code/User/globalStorage/github.copilot-chat/settings/mcp.json`
-- **Linux**: `~/.config/Code/User/globalStorage/github.copilot-chat/settings/mcp.json`
-
-Add the following configuration:
-
-```json
-{
-  "mcpServers": {
-    "memory-qdrant-mcp": {
-      "command": "npx",
-      "args": ["memory-qdrant-mcp"],
-      "env": {
-        "QDRANT_URL": "http://localhost:6333",
-        "EMBEDDING_PROVIDER": "openrouter",
-        "EMBEDDING_MODEL": "qwen/qwen3-embedding-8b",
-        "SUMMARIZER_PROVIDER": "openrouter",
-        "SUMMARIZER_MODEL": "openai/gpt-oss-20b:free",
-        "OPENROUTER_API_KEY": "your_openrouter_api_key_here",
-        "GEMINI_API_KEY": "your_gemini_api_key_here",
-        "DEFAULT_TOP_K_MEMORY_QUERY": "3"
-      }
-    }
-  }
-}
-```
-
-### For Roo
-
-Add to your Roo MCP settings:
-
-```json
-{
-  "mcpServers": {
-    "memory-qdrant-mcp": {
-      "command": "npx",
-      "args": ["memory-qdrant-mcp"],
-      "env": {
-        "QDRANT_URL": "http://localhost:6333",
-        "EMBEDDING_PROVIDER": "openrouter",
-        "OPENROUTER_API_KEY": "your_openrouter_api_key_here"
-      }
-    }
-  }
-}
-```
-
-## 🎯 Agent Skill
-
-A complete **Claude Agent Skill** is available in the [`skill/`](skill/) directory. This allows Claude to automatically use this MCP server's memory management capabilities when relevant.
-
-**What's included:**
-- ✅ Complete SKILL.md with YAML frontmatter and progressive disclosure architecture
-- ✅ Comprehensive API reference for all 35 tools  
-- ✅ Configuration guides for multiple platforms
-- ✅ Example workflows and best practices
-- ✅ MCP server configuration templates
-
-**Installation:**
-- **Claude.ai**: Zip and upload via Settings → Features → Skills
-- **Claude Code**: Copy to `.claude/skills/memory-qdrant-mcp/`
-- **Claude API**: Upload via Skills API endpoint
-- **Agent SDK**: Copy to `.claude/skills/` directory
-
-See [`skill/README.md`](skill/README.md) for detailed installation and usage instructions.
-
-## 🛠️ Available Tools (35 total)
-
-### Core Memory Operations (3 tools)
-
-#### log_memory
-Store a memory entry to the vector database.
-- `type`: Memory type (productContext, activeContext, systemPatterns, decisionLog, progress, customData)
-- `content`: Content to store
-- `project`: Project name
-- `topLevelId` (optional): Hierarchical identifier
-
-#### query_memory
-Query memory entries with semantic search.
-- `query`: Search query text
-- `type` (optional): Filter by memory type
-- `top_k` (optional): Number of results (default: 3)
-
-#### query_memory_summarized
-Query memory with automatic summarization of results.
-- `query`: Search query text
-- `type` (optional): Filter by memory type
-- `top_k` (optional): Number of results
-- `summarize` (optional): Enable summarization
-
-### Decision Logging (3 tools)
-
-#### log_decision
-Log architectural or project decisions.
-- `decision`: Decision text
-- `reasoning`: Rationale behind the decision
-- `alternatives`: Considered alternatives
-- `impact`: Expected impact
-- `project`: Project name
-
-#### get_decisions
-Retrieve decision history.
-- `project`: Project name
-- `limit` (optional): Number of decisions to retrieve
-
-#### search_decisions_fts
-Full-text search through decisions.
-- `searchText`: Search query
-- `project`: Project name
-- `limit` (optional): Number of results
-
-### Progress Tracking (4 tools)
-
-#### log_progress
-Log project milestone or progress.
-- `milestone`: Milestone description
-- `details`: Detailed information
-- `project`: Project name
-
-#### get_progress_with_status
-Retrieve progress entries by status.
-- `project`: Project name
-- `status`: Progress status (pending, in_progress, completed)
-
-#### update_progress_with_status
-Update progress entry status.
-- `progressId`: Progress entry ID
-- `status`: New status
-- `details` (optional): Updated details
-
-#### search_progress_entries
-Search progress entries with filters.
-- `searchText`: Search query
-- `project`: Project name
-- `status` (optional): Filter by status
-
-### Context Management (5 tools)
-
-#### get_product_context
-Retrieve product context for a project.
-- `project`: Project name
-
-#### update_product_context
-Update product context information.
-- `context`: New context content
-- `project`: Project name
-
-#### get_active_context
-Get current active working context.
-- `project`: Project name
-
-#### update_active_context
-Update active working context.
-- `context`: New context content
-- `project`: Project name
-
-#### get_context_history
-Retrieve context change history.
-- `project`: Project name
-- `limit` (optional): Number of history entries
-
-### System Patterns (3 tools)
-
-#### get_system_patterns
-Retrieve system design patterns.
-- `project`: Project name
-
-#### update_system_patterns
-Update system patterns.
-- `patterns`: Pattern descriptions
-- `project`: Project name
-
-#### search_system_patterns
-Search through system patterns.
-- `searchText`: Search query
-- `project`: Project name
-- `limit` (optional): Number of results
-
-### Knowledge Links (2 tools)
-
-#### create_knowledge_link
-Create relationship between memory entries.
-- `sourceId`: Source memory ID
-- `targetId`: Target memory ID
-- `linkType`: Type of relationship
-- `description`: Link description
-
-#### get_knowledge_links
-Retrieve knowledge links for a memory.
-- `memoryId`: Memory entry ID
-- `linkType` (optional): Filter by link type
-
-### Search & Analysis (2 tools)
-
-#### semantic_search
-Perform semantic search across all memories.
-- `query`: Search query
-- `project`: Project name
-- `top_k` (optional): Number of results
-
-#### summarize_text
-Summarize any text content.
-- `text`: Text to summarize
-
-### Custom Data (5 tools)
-
-#### store_custom_data
-Store custom key-value data.
-- `key`: Data key
-- `value`: Data value (any JSON type)
-- `tags` (optional): Tags for categorization
-- `project`: Project name
-
-#### get_custom_data
-Retrieve custom data by key.
-- `key`: Data key
-- `project`: Project name
-
-#### query_custom_data
-Query custom data with semantic search.
-- `query`: Search query
-- `project`: Project name
-- `top_k` (optional): Number of results
-
-#### search_custom_data
-Full-text search in custom data.
-- `searchText`: Search query
-- `project`: Project name
-- `tags` (optional): Filter by tags
-
-#### update_custom_data
-Update existing custom data.
-- `key`: Data key
-- `value`: New value
-- `project`: Project name
-
-### Batch Operations (3 tools)
-
-#### batch_log_memory
-Log multiple memory entries at once.
-- `entries`: Array of memory entries
-
-#### batch_query_memory
-Query multiple terms simultaneously.
-- `queries`: Array of query strings
-- `type` (optional): Memory type filter
-- `top_k` (optional): Results per query
-
-#### batch_update_context
-Update multiple context types at once.
-- `updates`: Object with context updates
-- `project`: Project name
-
-### Workspace Management (2 tools)
-
-#### initialize_workspace
-Initialize a new project workspace.
-- `project`: Project name
-- `description`: Project description
-
-#### sync_memory
-Synchronize memory with current state.
-- `project`: Project name
-- `direction`: 'push' or 'pull'
-
-### Import/Export (2 tools)
-
-#### export_memory_to_markdown
-Export memories to markdown files.
-- `project`: Project name
-- `outputPath`: Export directory path
-
-#### import_memory_from_markdown
-Import memories from markdown files.
-- `markdownPath`: Import directory path
-- `project`: Project name
-
-### Conversation Analysis (1 tool)
-
-#### analyze_conversation
-Analyze conversation and extract insights.
-- `messages`: Array of conversation messages
-- `project`: Project name
-
-## 🧪 Testing
-
-### Run Test Suite
-
-The project includes comprehensive Jest tests for all 35 MCP tools:
+The full environment-variable reference, including the Postgres table, is in [`skill/MCP-CONFIG.md`](skill/MCP-CONFIG.md).
+
+**Changing `VECTOR_DIM` destroys data on Qdrant.** On the next call the server sees the size mismatch against the stored collection, warns on stderr, deletes that collection and recreates it empty. On Postgres the vector column width is fixed at schema-creation time; a mismatch instead throws a descriptive error and changes nothing.
+
+### Embedding providers
+
+| Provider | Notes |
+|----------|-------|
+| `onnx` (default) | In-process CPU inference. `nomic-ai/nomic-embed-text-v1.5`, 768 dims, ~140MB at `q8`, downloaded once into `~/mcp/project-agent-memory/models` so `npx` runs reuse it |
+| `openai` | Any endpoint speaking `/v1/embeddings`. Set `OPENAI_BASE_URL`; for Ollama use `http://localhost:11434/v1` |
+| `gemini` | Requires `GEMINI_API_KEY` |
+| `openrouter` | Requires `OPENROUTER_API_KEY` |
+
+An unrecognized `EMBEDDING_PROVIDER` is a startup error.
+
+## Tools
+
+All seven take `project_name` (case-sensitive; it selects the `memory_bank_<project_name>` collection).
+
+`memory_type` is one of: `productContext`, `activeContext`, `systemPatterns`, `decisionLog`, `progress`, `contextHistory`, `customData`, `knowledgeLink`.
+
+The four CRUD tools take arrays, so a single write and a batch write use the same call shape - send one element or many.
+
+### memory_create
+Store entries. `project_name`, `items[]` of `{ memory_type, content, id?, metadata? }` (min 1). `metadata` holds filterable fields such as `status`, `priority` or `dataType`. Returns `[{ id, type }]`.
+
+### memory_read
+Retrieve entries. `project_name`, `queries[]` of `{ query_text?, memory_type?, metadata_filter?, limit? }` (min 1, `limit` default 5).
+With `query_text` a query is a semantic search; without it, a recency-ordered listing that embeds nothing. `metadata_filter` matches on the fields stored by `memory_create`; an array value matches any of its elements. A single query returns `[{ id, score, content, type, timestamp, metadata }]`; several return one such array per query.
+
+### memory_update
+Update entries by id. `project_name`, `items[]` of `{ id, content?, metadata? }` (min 1). Content is re-embedded when supplied; omitting it keeps the stored vector. `metadata` is shallow-merged. Returns `[{ id, updated }]`.
+
+### memory_delete
+Permanently delete entries. `project_name`, `ids` (array, min 1). Returns `{ deleted }`.
+
+### memory_context
+Read, and optionally patch, the project's working state. `project_name`, optional `product_context`, optional `active_context`, `pattern_limit` (default 20). Patches are shallow-merged and the previous version is written to `contextHistory`; reads happen after writes. Initializes the workspace when product context is empty.
+
+### memory_graph
+Knowledge graph over the entries. `project_name`, `op`:
+- `link` - `edges[]` of `{ from_id, to_id, relation, description? }`. Returns the created edges.
+- `neighbors` - `id`, optional `relation`, `depth` (default 1), `direction` (`outgoing` / `incoming` / `both`, default `both`). Walks the graph outwards and returns `{ neighbors: [{ id, depth, via, content, type }], edges }`.
+- `unlink` - `link_ids` (the edges' own ids). Returns `{ deleted }`.
+
+Edges are stored in the same collection as ordinary points of type `knowledgeLink`; no second collection and no extra service.
+
+### memory_admin
+`project_name`, `op`:
+- `export` - optional `memory_types`. Returns the memory bank as markdown.
+- `import` - `markdown` in this server's own export format. Returns `{ imported, errors, timestamp }`.
+- `summarize` - `content`. Returns a condensed version, for shrinking a long text before storing it.
+- `delete_collection` - permanently deletes the entire memory bank (collection and all its points) for `project_name`. No confirmation step - irreversible.
+
+Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-REFERENCE.md).
+
+### Migrating from v2.x
+
+v3.0 condenses the 35 v2 tools into these 7; the per-tool mapping is in [`skill/SKILL.md`](skill/SKILL.md).
+
+### Migrating Qdrant data into Postgres
+
+`skill/migrate-qdrant-to-pgvector.mjs` is a one-time, one-way copy of every point in a Qdrant collection into the Postgres backend's schema, through the same pREST endpoint the server itself uses. It's only needed if you have existing Qdrant data and want to start using `MEMORY_BACKEND=postgres` with it - the two backends are otherwise independent and nothing else moves data between them.
 
 ```bash
-npm test
+node skill/migrate-qdrant-to-pgvector.mjs --project project-agent-memory \
+  --qdrant-url http://localhost:6333 \
+  --prest-url http://localhost:3000 \
+  --prest-jwt-key change-me
 ```
 
-### Test Coverage
+Source vectors of any dimension are supported: if the Qdrant collection's vector size differs from the target `VECTOR_DIM`, the script truncates and re-normalizes (Matryoshka-style, same as the embedding layer) when the source is larger, and refuses with a clear error rather than padding when the source is smaller. Run with `--help` for the full flag list, including `--dry-run`.
+
+## Testing
+
+Interactive:
 
 ```bash
-npm test -- --coverage
-```
-
-### MCP Inspector (Interactive Testing)
-
-Test all tools interactively with MCP Inspector:
-
-```bash
+npm run build
 npx @modelcontextprotocol/inspector node dist/index.js
 ```
 
-This opens a web interface at `http://localhost:6274` where you can:
-- View all 35 registered tools
-- Test individual tools with custom parameters
-- Inspect request/response JSON-RPC messages
-- Verify error handling and fallback mechanisms
+Opens http://localhost:6274.
 
-### Test Results
+Smoke test over stdio:
 
-All 35 tools are tested including:
-- Core memory operations
-- Decision logging and retrieval
-- Progress tracking with status management
-- Context management (product, active, history)
-- System patterns
-- Knowledge link creation
-- Semantic search
-- Text summarization (with provider fallbacks)
-- Custom data CRUD operations
-- Batch operations
-- Workspace management
-- Import/Export markdown functionality
-- Conversation analysis
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | node dist/index.js
+```
 
-## 🏗️ Development
+## Development
 
-### Project Structure
+### Project structure
 
 ```
-memory-qdrant-mcp/
-├── src/                      # TypeScript source files
-│   ├── index.ts              # Main MCP server entry point
-│   ├── types.ts              # TypeScript type definitions
-│   ├── config.ts             # Configuration management
-│   ├── cache.ts              # LRU caching implementation
-│   ├── embeddings.ts         # Embedding provider factory
-│   ├── embeddings/           # Embedding providers
+project-agent-memory/
+├── src/
+│   ├── index.ts              # MCP server entry point, 7 tool registrations
+│   ├── config.ts             # Environment configuration and VECTOR_DIM validation
+│   ├── init.ts               # Collection creation and dimension guard
+│   ├── cache.ts              # LRU caches and invalidation
+│   ├── constants.ts
+│   ├── types.ts
+│   ├── utils.ts
+│   ├── embeddings.ts         # Provider factory
+│   ├── embeddings/
 │   │   ├── providerBase.ts   # Abstract base class
-│   │   ├── openrouter.ts     # OpenRouter (OpenAI SDK)
-│   │   ├── geminiVertex.ts   # Google Gemini
-│   │   ├── ollama.ts         # Ollama (local/cloud)
-│   │   └── fastEmbed.ts      # FastEmbed (fallback)
-│   └── mcp_tools/            # MCP tool implementations
-│       ├── memoryBankTools.ts  # 39 core functions
-│       ├── contextTools.ts     # Context operations
-│       ├── store.ts            # Decision & progress logging
-│       ├── search.ts           # Search operations
-│       └── summarizer.ts       # Text summarization
-├── dist/                     # Compiled JavaScript (generated)
-├── tests/                    # Test files
-│   ├── all-tools.test.ts     # Comprehensive test suite
-│   └── README.md             # Testing documentation
-├── tests_backup_js/          # Archived JavaScript tests
-├── server_backup_js/         # Archived JavaScript source
-├── package.json              # Dependencies & scripts
-├── tsconfig.json             # TypeScript configuration
-├── jest.config.js            # Jest test configuration
-└── README.md                 # This file
+│   │   ├── onnx.ts           # In-process ONNX inference
+│   │   ├── openaiCompatible.ts
+│   │   ├── geminiVertex.ts
+│   │   └── openrouter.ts
+│   ├── backends/
+│   │   └── postgres.ts       # Qdrant-API-shaped shim over pg + pgvector
+│   └── mcp_tools/
+│       ├── memoryBankTools.ts
+│       └── summarizer.ts
+├── dist/                     # Compiled output (generated)
+├── tests/
+├── skill/                    # Claude Agent Skill, incl. the Qdrant->Postgres migration script
+├── .claude-plugin/
+│   └── plugin.json           # Plugin manifest (name, userConfig, skill path)
+├── hooks/
+│   ├── hooks.json             # SessionStart / PostToolUse / Stop wiring
+│   └── inject.js              # Memory-first rules + commit auto-logging + Stop hard-block
+├── commands/
+│   └── memory-sync.md         # /memory-sync
+├── .mcp.json                  # Plugin's bundled MCP server registration
+├── package.json
+└── tsconfig.json
 ```
 
 ### Build
 
-Compile TypeScript to JavaScript:
-
 ```bash
-npm run build
+npm run build   # compile to dist/
+npm run dev     # watch mode
 ```
 
-### Development Mode
-
-Watch for changes and recompile automatically:
-
-```bash
-npm run dev
-```
-
-### Adding New Tools
-
-1. Implement the tool function in `src/mcp_tools/`
-2. Register it in `src/index.ts` using `server.registerTool()`
-3. Define Zod schema for parameter validation
-4. Add test case in `tests/all-tools.test.ts`
-5. Update this README
-
-### Architecture Highlights
-
-**TypeScript & Type Safety**
-- Full TypeScript implementation with strict type checking
-- Zod schemas for runtime parameter validation
-- Type-safe MCP SDK integration
-
-**Logging**
-- All logs output to `stderr` for production visibility
-- Logs don't interfere with MCP protocol on `stdout`
-- Structured error logging with context
-
-**Fallback Mechanisms**
-- Embeddings: Primary provider → FastEmbed (local, no API needed)
-- Summarization: Primary provider → OpenRouter → Original text
-- Graceful degradation ensures service availability
-
-**Performance Optimizations**
-- Connection pooling for Qdrant client
-- LRU caching for embeddings and query results
-- Automatic cache invalidation on data updates
-- Configurable cache sizes and TTL
-
-## 🚀 Publishing to npm
-
-To publish your own version:
-
-1. Update `package.json` with your information:
-   ```json
-   {
-     "name": "your-package-name",
-     "version": "2.0.0",
-     "author": "Your Name",
-     "repository": "https://github.com/yourname/your-repo",
-     "homepage": "https://github.com/yourname/your-repo"
-   }
-   ```
-
-2. Build the project:
-   ```bash
-   npm run build
-   ```
-
-3. Login to npm:
-   ```bash
-   npm login
-   ```
-
-4. Publish:
-   ```bash
-   npm publish
-   ```
-
-5. Users can then install and run:
-   ```bash
-   npx your-package-name
-   ```
-
-## 📝 License
+## License
 
 MIT
 
-## 🤝 Contributing
+## Resources
 
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure `npm test` passes
-5. Submit a pull request
-
-## 📚 Resources
-
-- [Model Context Protocol Documentation](https://modelcontextprotocol.io)
-- [Qdrant Vector Database](https://qdrant.tech)
-- [OpenRouter API](https://openrouter.ai)
-- [Google Gemini API](https://ai.google.dev)
-- [Ollama](https://ollama.ai)
+- [Model Context Protocol](https://modelcontextprotocol.io)
+- [Qdrant](https://qdrant.tech)
+- [pgvector](https://github.com/pgvector/pgvector)
+- [Transformers.js](https://huggingface.co/docs/transformers.js)
+- [OpenRouter](https://openrouter.ai)

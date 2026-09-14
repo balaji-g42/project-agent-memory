@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Main entry point for MCP server
 import "dotenv/config";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -10,42 +9,27 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
-import { logMemory, queryMemory } from "./mcp_tools/memoryBankTools.js";
-import { logDecision, logProgress } from "./mcp_tools/store.js";
-import { summarizeText } from "./mcp_tools/summarizer.js";
 import {
-    getProductContext,
-    updateProductContext,
-    getActiveContext,
-    updateActiveContext,
-    getDecisionsStructured,
-    searchDecisionsFTSStructured,
-    semanticSearchStructured,
-    createKnowledgeLinkStructured,
-    getKnowledgeLinksStructured,
-    getContextHistoryStructured,
-    batchLogMemoryStructured,
-    batchQueryMemoryStructured,
-    batchUpdateStructuredContextStructured,
-    getSystemPatternsStructured,
-    updateSystemPatternsStructured,
-    searchSystemPatternsStructured,
-    getProgressWithStatusStructured,
-    updateProgressWithStatusStructured,
-    searchProgressEntriesStructured,
-    storeCustomDataStructured,
-    getCustomDataStructured,
-    queryCustomDataStructured,
-    searchCustomDataStructured,
-    updateCustomDataStructured,
-    initializeWorkspaceStructured,
-    syncMemoryStructured,
-    exportMemoryToMarkdownStructured,
-    importMemoryFromMarkdownStructured,
-    analyzeConversationStructured
-} from "./mcp_tools/contextTools.js";
+    logMemory,
+    queryMemory,
+    listMemory,
+    updateMemory,
+    deleteMemory,
+    deleteCollection,
+    getStructuredContext,
+    updateStructuredContext,
+    getSystemPatterns,
+    getContextHistory,
+    initializeWorkspace,
+    createKnowledgeLink,
+    getKnowledgeLinks,
+    getNeighbors,
+    deleteKnowledgeLinks,
+    exportMemoryToMarkdown,
+    importMemoryFromMarkdown
+} from "./mcp_tools/memoryBankTools.js";
+import { summarizeText } from "./mcp_tools/summarizer.js";
 
-// Log uncaught errors so startup failures are visible
 process.on("unhandledRejection", (reason) => {
     console.error("UnhandledRejection:", reason);
 });
@@ -54,758 +38,204 @@ process.on("uncaughtException", (err) => {
     process.exit(1);
 });
 
-// Read package.json to get version
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageJson = JSON.parse(
     readFileSync(join(__dirname, "..", "package.json"), "utf-8")
 );
 
-// Create McpServer instance
+const MEMORY_TYPES = [
+    "productContext",
+    "activeContext",
+    "systemPatterns",
+    "decisionLog",
+    "progress",
+    "contextHistory",
+    "customData",
+    "knowledgeLink"
+] as const;
+
+const memoryTypeSchema = z.enum(MEMORY_TYPES);
+
 const server = new McpServer({
-    name: "memory-qdrant-mcp",
+    name: "project-agent-memory",
     version: packageJson.version,
 });
 
-// Register all tools using McpServer.registerTool()
-
-// Basic memory operations
-server.registerTool('log_memory', {
-    description: "Log a memory entry to the vector database",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        memory_type: z.string().describe("Type of memory (e.g., productContext, activeContext)"),
-        content: z.string().describe("Content to log"),
-        top_level_id: z.string().optional().describe("Optional top level ID")
-    })
-}, async (params) => {
-    const memoryId = await logMemory(
-        params.project_name,
-        params.memory_type as any, // Cast to avoid strict type checking
-        params.content,
-        params.top_level_id
-    );
+function text(payload: unknown) {
     return {
         content: [{
-            type: "text",
-            text: `Memory logged with ID: ${memoryId}`
+            type: "text" as const,
+            text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)
         }]
     };
-});
+}
 
-server.registerTool('query_memory', {
-    description: "Query memory entries from the vector database",
+server.registerTool('memory_create', {
+    description: "Store one or more memory entries in a single call. Use memory_type to classify each: decisionLog for a choice plus rationale, progress for completed or blocked work, systemPatterns for a reusable rule, productContext/activeContext for project state, customData for verbatim documents. Use metadata for filterable fields such as status, priority or dataType.",
     inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        query_text: z.string().describe("Query text"),
-        memory_type: z.string().optional().describe("Optional memory type filter"),
-        top_k: z.number().optional().default(3).describe("Number of results to return")
+        project_name: z.string().describe("Project name, case-sensitive"),
+        items: z.array(z.object({
+            memory_type: memoryTypeSchema.describe("Memory type"),
+            content: z.string().describe("Content to store"),
+            id: z.string().optional().describe("Optional explicit id; overwrites an existing entry"),
+            metadata: z.record(z.any()).optional().describe("Filterable fields, e.g. { status: \"in_progress\", priority: \"high\" }")
+        })).min(1).describe("One entry for a single write, many for a batch")
     })
 }, async (params) => {
-    const results = await queryMemory(
-        params.project_name,
-        params.query_text,
-        params.memory_type,
-        params.top_k
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
+    const ids = await Promise.all(params.items.map(item =>
+        logMemory(params.project_name, item.memory_type, item.content, item.id ?? null, item.metadata ?? {})
+    ));
+    return text(ids.map((id, i) => ({ id, type: params.items[i].memory_type })));
 });
 
-server.registerTool('log_decision', {
-    description: "Log a decision entry",
+server.registerTool('memory_read', {
+    description: "Retrieve memory entries. Each query with query_text runs semantic search; without it, lists the most recent entries of the given type. metadata_filter narrows on fields stored via memory_create, with an array value matching any of its elements.",
     inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        decision_text: z.string().describe("Decision text"),
-        top_level_id: z.string().optional().describe("Optional top level ID")
-    })
-}, async (params) => {
-    const decisionId = await logDecision(
-        params.project_name,
-        params.decision_text,
-        params.top_level_id
-    );
-    return {
-        content: [{
-            type: "text",
-            text: `Decision logged with ID: ${decisionId}`
-        }]
-    };
-});
-
-server.registerTool('log_progress', {
-    description: "Log a progress entry",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        progress_text: z.string().describe("Progress text"),
-        top_level_id: z.string().optional().describe("Optional top level ID")
-    })
-}, async (params) => {
-    const progressId = await logProgress(
-        params.project_name,
-        params.progress_text,
-        params.top_level_id
-    );
-    return {
-        content: [{
-            type: "text",
-            text: `Progress logged with ID: ${progressId}`
-        }]
-    };
-});
-
-server.registerTool('summarize_text', {
-    description: "Summarize the given text",
-    inputSchema: z.object({
-        text: z.string().describe("Text to summarize")
-    })
-}, async (params) => {
-    const summary = await summarizeText(params.text);
-    return {
-        content: [{
-            type: "text",
-            text: summary
-        }]
-    };
-});
-
-server.registerTool('query_memory_summarized', {
-    description: "Query memory entries and return summarized results to reduce token usage",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        query_text: z.string().describe("Query text"),
-        memory_type: z.string().optional().describe("Optional memory type filter"),
-        top_k: z.number().optional().default(3).describe("Number of results to return")
-    })
-}, async (params) => {
-    const results = await queryMemory(
-        params.project_name,
-        params.query_text,
-        params.memory_type,
-        params.top_k
-    );
-    const resultsText = JSON.stringify(results, null, 2);
-    const summary = await summarizeText(resultsText);
-    return {
-        content: [{
-            type: "text",
-            text: summary
-        }]
-    };
-});
-
-// Context management tools
-server.registerTool('get_product_context', {
-    description: "Get the product context for a project",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project")
-    })
-}, async (params) => {
-    const context = await getProductContext(params.project_name);
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(context, null, 2)
-        }]
-    };
-});
-
-server.registerTool('update_product_context', {
-    description: "Update the product context for a project",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        content: z.record(z.string(), z.any()).optional().describe("Full content to replace"),
-        patch_content: z.record(z.string(), z.any()).optional().describe("Partial content to merge")
-    })
-}, async (params) => {
-    const resultId = await updateProductContext(
-        params.project_name,
-        params.content,
-        params.patch_content
-    );
-    return {
-        content: [{
-            type: "text",
-            text: `Product context updated with ID: ${resultId}`
-        }]
-    };
-});
-
-server.registerTool('get_active_context', {
-    description: "Get the active context for a project",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project")
-    })
-}, async (params) => {
-    const context = await getActiveContext(params.project_name);
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(context, null, 2)
-        }]
-    };
-});
-
-server.registerTool('update_active_context', {
-    description: "Update the active context for a project",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        content: z.record(z.string(), z.any()).optional().describe("Full content to replace"),
-        patch_content: z.record(z.string(), z.any()).optional().describe("Partial content to merge")
-    })
-}, async (params) => {
-    const resultId = await updateActiveContext(
-        params.project_name,
-        params.content,
-        params.patch_content
-    );
-    return {
-        content: [{
-            type: "text",
-            text: `Active context updated with ID: ${resultId}`
-        }]
-    };
-});
-
-server.registerTool('get_decisions', {
-    description: "Get decisions for a project",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        limit: z.number().optional().default(10).describe("Maximum number of decisions to return"),
-        tags_filter_include_all: z.array(z.string()).optional().describe("Tags that must all be present"),
-        tags_filter_include_any: z.array(z.string()).optional().describe("Tags where at least one must be present")
-    })
-}, async (params) => {
-    const decisions = await getDecisionsStructured(
-        params.project_name,
-        params.limit,
-        params.tags_filter_include_all,
-        params.tags_filter_include_any
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(decisions, null, 2)
-        }]
-    };
-});
-
-server.registerTool('search_decisions_fts', {
-    description: "Search decisions using full-text search",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        query_term: z.string().describe("Search query term"),
-        limit: z.number().optional().default(10).describe("Maximum number of results to return")
-    })
-}, async (params) => {
-    const results = await searchDecisionsFTSStructured(
-        params.project_name,
-        params.query_term,
-        params.limit
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
-});
-
-server.registerTool('semantic_search', {
-    description: "Perform semantic search across all memory types using embeddings",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        query_text: z.string().describe("Natural language query for semantic search"),
-        limit: z.number().optional().default(10).describe("Maximum number of results to return"),
-        memory_types: z.array(z.string()).optional().describe("Optional filter for specific memory types")
-    })
-}, async (params) => {
-    const results = await semanticSearchStructured(
-        params.project_name,
-        params.query_text,
-        params.limit,
-        params.memory_types
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
-});
-
-// Knowledge graph tools
-server.registerTool('create_knowledge_link', {
-    description: "Create a knowledge link between two memory entities",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        source_id: z.string().describe("ID of the source entity"),
-        target_id: z.string().describe("ID of the target entity"),
-        link_type: z.string().describe("Type of relationship (e.g., 'related_to', 'depends_on', 'implements')"),
-        metadata: z.record(z.string(), z.any()).optional().describe("Optional metadata for the link")
-    })
-}, async (params) => {
-    const linkId = await createKnowledgeLinkStructured(
-        params.project_name,
-        params.source_id,
-        params.target_id,
-        params.link_type,
-        params.metadata as any // Cast to match expected type
-    );
-    return {
-        content: [{
-            type: "text",
-            text: `Knowledge link created with ID: ${linkId}`
-        }]
-    };
-});
-
-server.registerTool('get_knowledge_links', {
-    description: "Get knowledge links for an entity",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        entity_id: z.string().describe("ID of the entity to get links for"),
-        link_type: z.string().optional().describe("Optional filter by link type"),
-        direction: z.enum(['outgoing', 'incoming', 'both']).optional().default('both').describe("Direction of links to retrieve")
-    })
-}, async (params) => {
-    const links = await getKnowledgeLinksStructured(
-        params.project_name,
-        params.entity_id,
-        params.link_type,
-        params.direction
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(links, null, 2)
-        }]
-    };
-});
-
-server.registerTool('get_context_history', {
-    description: "Get the history of context changes for a project",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        context_type: z.enum(['product', 'active']).describe("Type of context to get history for"),
-        limit: z.number().optional().default(10).describe("Maximum number of history entries to return")
-    })
-}, async (params) => {
-    const history = await getContextHistoryStructured(
-        params.project_name,
-        params.context_type,
-        params.limit
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(history, null, 2)
-        }]
-    };
-});
-
-// Batch operations
-server.registerTool('batch_log_memory', {
-    description: "Log multiple memory entries at once",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        entries: z.array(z.object({
-            memoryType: z.string(),
-            content: z.string(),
-            topLevelId: z.string().optional()
-        })).describe("Array of memory entries to log")
-    })
-}, async (params) => {
-    const ids = await batchLogMemoryStructured(params.project_name, params.entries as any);
-    return {
-        content: [{
-            type: "text",
-            text: `${ids.length} memory entries logged: ${JSON.stringify(ids, null, 2)}`
-        }]
-    };
-});
-
-server.registerTool('batch_query_memory', {
-    description: "Query multiple memory entries at once",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
+        project_name: z.string().describe("Project name, case-sensitive"),
         queries: z.array(z.object({
-            queryText: z.string(),
-            memoryType: z.string().optional(),
-            topK: z.number().optional()
-        })).describe("Array of queries to execute")
+            query_text: z.string().optional().describe("Search text; omit to list by recency"),
+            memory_type: memoryTypeSchema.optional().describe("Restrict to one memory type"),
+            metadata_filter: z.record(z.any()).optional().describe("Metadata equality filter, e.g. { status: [\"pending\", \"blocked\"] }"),
+            limit: z.number().optional().default(5).describe("Maximum entries to return")
+        })).min(1).describe("One query for a single read, many for a batch")
     })
 }, async (params) => {
-    const results = await batchQueryMemoryStructured(params.project_name, params.queries as any);
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
+    const results = await Promise.all(params.queries.map(q =>
+        q.query_text
+            ? queryMemory(params.project_name, q.query_text, q.memory_type ?? null, q.limit, q.metadata_filter ?? null)
+            : listMemory(params.project_name, q.memory_type ?? null, q.limit, q.metadata_filter ?? null)
+    ));
+    return text(results.length === 1 ? results[0] : results);
 });
 
-server.registerTool('batch_update_context', {
-    description: "Update multiple context types at once",
+server.registerTool('memory_update', {
+    description: "Update existing memory entries by id. Content is re-embedded when supplied; metadata is shallow-merged into what is already stored.",
     inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        updates: z.array(z.object({
-            contextType: z.enum(['productContext', 'activeContext']),
-            patchContent: z.record(z.string(), z.any())
-        })).describe("Array of context updates")
+        project_name: z.string().describe("Project name, case-sensitive"),
+        items: z.array(z.object({
+            id: z.string().describe("Id of the entry to update"),
+            content: z.string().optional().describe("New content; omit to keep the existing content and vector"),
+            metadata: z.record(z.any()).optional().describe("Metadata fields to merge in")
+        })).min(1).describe("One entry for a single update, many for a batch")
     })
 }, async (params) => {
-    const results = await batchUpdateStructuredContextStructured(params.project_name, params.updates as any);
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
+    await Promise.all(params.items.map(item =>
+        updateMemory(params.project_name, item.id, item.content, item.metadata)
+    ));
+    return text(params.items.map(item => ({ id: item.id, updated: true })));
 });
 
-// System patterns tools
-server.registerTool('get_system_patterns', {
-    description: "Get system patterns for a project",
+server.registerTool('memory_delete', {
+    description: "Permanently delete memory entries by id.",
     inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        limit: z.number().optional().default(50).describe("Maximum number of patterns to return")
+        project_name: z.string().describe("Project name, case-sensitive"),
+        ids: z.array(z.string()).min(1).describe("Ids of entries to delete")
     })
 }, async (params) => {
-    const patterns = await getSystemPatternsStructured(params.project_name, params.limit);
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(patterns, null, 2)
-        }]
-    };
+    const deleted = await deleteMemory(params.project_name, params.ids);
+    return text({ deleted });
 });
 
-server.registerTool('update_system_patterns', {
-    description: "Update system patterns for a project",
+server.registerTool('memory_context', {
+    description: "Load or update the project's working context: product context, active context and system patterns. Call at session start with no update fields; pass product_context or active_context to patch them.",
     inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        patterns: z.array(z.string()).describe("Array of pattern strings to store")
+        project_name: z.string().describe("Project name, case-sensitive"),
+        product_context: z.record(z.any()).optional().describe("Patch to merge into product context"),
+        active_context: z.record(z.any()).optional().describe("Patch to merge into active context"),
+        pattern_limit: z.number().optional().default(20).describe("Maximum system patterns to return"),
+        history_for: z.enum(["productContext", "activeContext"]).optional().describe("Also return recent change history for this context type"),
+        history_limit: z.number().optional().default(10).describe("Maximum history entries to return when history_for is set")
     })
 }, async (params) => {
-    const resultIds = await updateSystemPatternsStructured(
-        params.project_name,
-        params.patterns
-    );
-    return {
-        content: [{
-            type: "text",
-            text: `System patterns updated: ${JSON.stringify(resultIds, null, 2)}`
-        }]
-    };
+    if (params.product_context) {
+        await updateStructuredContext(params.project_name, "productContext", params.product_context);
+    }
+    if (params.active_context) {
+        await updateStructuredContext(params.project_name, "activeContext", params.active_context);
+    }
+
+    const productContext = await getStructuredContext(params.project_name, "productContext");
+    if (Object.keys(productContext).length === 0) {
+        await initializeWorkspace(params.project_name);
+    }
+
+    const [product, active, patterns, history] = await Promise.all([
+        getStructuredContext(params.project_name, "productContext"),
+        getStructuredContext(params.project_name, "activeContext"),
+        getSystemPatterns(params.project_name, params.pattern_limit),
+        params.history_for
+            ? getContextHistory(params.project_name, params.history_for, params.history_limit)
+            : Promise.resolve(undefined)
+    ]);
+
+    return text({ productContext: product, activeContext: active, systemPatterns: patterns, ...(history ? { history } : {}) });
 });
 
-server.registerTool('search_system_patterns', {
-    description: "Search system patterns using semantic search",
+server.registerTool('memory_graph', {
+    description: "Knowledge graph over memory entries. op=link creates typed edges between entries, op=neighbors walks the graph outwards from an entry up to the given depth, op=unlink deletes edges by their own ids.",
     inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        query_text: z.string().describe("Natural language query for semantic search"),
-        limit: z.number().optional().default(10).describe("Maximum number of results to return")
+        project_name: z.string().describe("Project name, case-sensitive"),
+        op: z.enum(["link", "neighbors", "unlink"]).describe("Graph operation"),
+        edges: z.array(z.object({
+            from_id: z.string().describe("Source memory id"),
+            to_id: z.string().describe("Target memory id"),
+            relation: z.string().describe("Relation name, e.g. \"caused_by\", \"supersedes\""),
+            description: z.string().optional().describe("Human-readable edge label")
+        })).optional().describe("op=link: edges to create"),
+        id: z.string().optional().describe("op=neighbors: entry to start from"),
+        relation: z.string().optional().describe("op=neighbors: restrict traversal to one relation"),
+        depth: z.number().optional().default(1).describe("op=neighbors: how many hops to walk"),
+        direction: z.enum(["outgoing", "incoming", "both"]).optional().default("both").describe("op=neighbors: edge direction to follow"),
+        link_ids: z.array(z.string()).optional().describe("op=unlink: edge ids to delete")
     })
 }, async (params) => {
-    const results = await searchSystemPatternsStructured(
-        params.project_name,
-        params.query_text,
-        params.limit
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
+    if (params.op === "link") {
+        if (!params.edges?.length) throw new Error("op=link requires edges");
+        return text(await createKnowledgeLink(params.project_name, params.edges));
+    }
+    if (params.op === "neighbors") {
+        if (!params.id) throw new Error("op=neighbors requires id");
+        const [neighbors, edges] = await Promise.all([
+            getNeighbors(params.project_name, params.id, params.relation ?? null, params.depth, params.direction),
+            getKnowledgeLinks(params.project_name, params.id, params.relation ?? null, params.direction)
+        ]);
+        return text({ neighbors, edges });
+    }
+    if (!params.link_ids?.length) throw new Error("op=unlink requires link_ids");
+    return text({ deleted: await deleteKnowledgeLinks(params.project_name, params.link_ids) });
 });
 
-// Progress tracking with status
-server.registerTool('get_progress_with_status', {
-    description: "Get progress entries filtered by status",
+server.registerTool('memory_admin', {
+    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it, op=delete_collection permanently deletes the entire memory bank for a project.",
     inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe("Optional filter by status"),
-        limit: z.number().optional().default(10).describe("Maximum number of results to return")
+        project_name: z.string().describe("Project name, case-sensitive"),
+        op: z.enum(["export", "import", "summarize", "delete_collection"]).describe("Admin operation"),
+        memory_types: z.array(memoryTypeSchema).optional().describe("op=export: types to include; defaults to the structured contexts, decisions and progress"),
+        markdown: z.string().optional().describe("op=import: markdown in this server's export format"),
+        content: z.string().optional().describe("op=summarize: text to condense")
     })
 }, async (params) => {
-    const progress = await getProgressWithStatusStructured(
-        params.project_name,
-        params.status,
-        params.limit
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(progress, null, 2)
-        }]
-    };
-});
-
-server.registerTool('update_progress_with_status', {
-    description: "Update progress entry with status",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        progress_id: z.string().describe("ID of the progress entry to update"),
-        status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).describe("New status"),
-        notes: z.string().optional().describe("Optional notes about the status change")
-    })
-}, async (params) => {
-    const resultId = await updateProgressWithStatusStructured(
-        params.project_name,
-        params.progress_id,
-        params.status,
-        params.notes
-    );
-    return {
-        content: [{
-            type: "text",
-            text: `Progress status updated with ID: ${resultId}`
-        }]
-    };
-});
-
-server.registerTool('search_progress_entries', {
-    description: "Search progress entries using full-text search",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        query_term: z.string().describe("Search query term"),
-        status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe("Optional filter by status"),
-        limit: z.number().optional().default(10).describe("Maximum number of results to return")
-    })
-}, async (params) => {
-    const results = await searchProgressEntriesStructured(
-        params.project_name,
-        params.query_term,
-        params.status,
-        params.limit
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
-});
-
-// Custom data storage
-server.registerTool('store_custom_data', {
-    description: "Store custom data in the vector database",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        data: z.any().describe("The custom data to store"),
-        data_type: z.string().describe("Type of custom data being stored"),
-        metadata: z.record(z.string(), z.any()).optional().describe("Optional metadata")
-    })
-}, async (params) => {
-    const dataId = await storeCustomDataStructured(
-        params.project_name,
-        params.data,
-        params.data_type,
-        params.metadata || {}
-    );
-    return {
-        content: [{
-            type: "text",
-            text: `Custom data stored with ID: ${dataId}`
-        }]
-    };
-});
-
-server.registerTool('get_custom_data', {
-    description: "Get custom data by ID",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        data_id: z.string().describe("ID of the custom data entry to retrieve")
-    })
-}, async (params) => {
-    const data = await getCustomDataStructured(
-        params.project_name,
-        params.data_id
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(data, null, 2)
-        }]
-    };
-});
-
-server.registerTool('query_custom_data', {
-    description: "Query custom data with filters",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        data_type: z.string().nullable().optional().describe("Type of custom data to query"),
-        metadata_filter: z.record(z.string(), z.any()).optional().describe("Metadata filter to apply"),
-        limit: z.number().optional().default(50).describe("Maximum number of results to return")
-    })
-}, async (params) => {
-    const results = await queryCustomDataStructured(
-        params.project_name,
-        params.data_type || null,
-        params.metadata_filter || {},
-        params.limit
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
-});
-
-server.registerTool('search_custom_data', {
-    description: "Search custom data using semantic search",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        query_text: z.string().describe("Natural language query for semantic search"),
-        data_type: z.string().nullable().optional().describe("Type of custom data to search"),
-        limit: z.number().optional().default(10).describe("Maximum number of results to return")
-    })
-}, async (params) => {
-    const results = await searchCustomDataStructured(
-        params.project_name,
-        params.query_text,
-        params.data_type || null,
-        params.limit
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-        }]
-    };
-});
-
-server.registerTool('update_custom_data', {
-    description: "Update existing custom data entry",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        data_id: z.string().describe("ID of the custom data entry to update"),
-        data: z.any().describe("Updated data"),
-        metadata: z.record(z.string(), z.any()).optional().describe("Optional updated metadata")
-    })
-}, async (params) => {
-    const success = await updateCustomDataStructured(
-        params.project_name,
-        params.data_id,
-        params.data,
-        params.metadata || {}
-    );
-    return {
-        content: [{
-            type: "text",
-            text: success ? `Custom data updated successfully` : `Failed to update custom data`
-        }]
-    };
-});
-
-// Workspace and memory management tools
-server.registerTool('initialize_workspace', {
-    description: "Initialize a new workspace/project in the memory system",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project to initialize"),
-        workspace_info: z.record(z.string(), z.any()).optional().describe("Optional workspace information")
-    })
-}, async (params) => {
-    const result = await initializeWorkspaceStructured(params.project_name, params.workspace_info || {});
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-        }]
-    };
-});
-
-server.registerTool('sync_memory', {
-    description: "Synchronize memory between local and remote stores",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        sync_sources: z.array(z.object({
-            name: z.string(),
-            type: z.string(),
-            config: z.record(z.string(), z.any()).optional()
-        })).optional().default([]).describe("Array of sync sources to use")
-    })
-}, async (params) => {
-    const result = await syncMemoryStructured(params.project_name, params.sync_sources);
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-        }]
-    };
-});
-
-server.registerTool('export_memory_to_markdown', {
-    description: "Export project memory to Markdown format",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        include_types: z.array(z.string()).optional().describe("Optional filter for specific memory types to export")
-    })
-}, async (params) => {
-    const markdown = await exportMemoryToMarkdownStructured(
-        params.project_name,
-        params.include_types
-    );
-    return {
-        content: [{
-            type: "text",
-            text: markdown
-        }]
-    };
-});
-
-server.registerTool('import_memory_from_markdown', {
-    description: "Import memory from Markdown format",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        markdown_content: z.string().describe("Markdown content to import")
-    })
-}, async (params) => {
-    const result = await importMemoryFromMarkdownStructured(
-        params.project_name,
-        params.markdown_content
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-        }]
-    };
-});
-
-server.registerTool('analyze_conversation', {
-    description: "Analyze a conversation and extract key insights, decisions, and action items",
-    inputSchema: z.object({
-        project_name: z.string().describe("Name of the project"),
-        conversation_text: z.string().describe("The conversation text to analyze")
-    })
-}, async (params) => {
-    const analysis = await analyzeConversationStructured(
-        params.project_name,
-        params.conversation_text
-    );
-    return {
-        content: [{
-            type: "text",
-            text: JSON.stringify(analysis, null, 2)
-        }]
-    };
+    if (params.op === "export") {
+        return text(await exportMemoryToMarkdown(params.project_name, params.memory_types ?? null));
+    }
+    if (params.op === "import") {
+        if (!params.markdown) throw new Error("op=import requires markdown");
+        return text(await importMemoryFromMarkdown(params.project_name, params.markdown));
+    }
+    if (params.op === "delete_collection") {
+        return text({ deleted: await deleteCollection(params.project_name) });
+    }
+    if (!params.content) throw new Error("op=summarize requires content");
+    return text(await summarizeText(params.content));
 });
 
 async function main() {
     const transport = new StdioServerTransport();
 
-    // Add error handling and logging for connection
     try {
         await server.connect(transport);
-        console.error("Memory Qdrant MCP server running on stdio");
+        console.error("Project Agent Memory server running on stdio");
     } catch (error) {
         const err = error as Error;
         console.error("Error connecting server:", err.stack || err);

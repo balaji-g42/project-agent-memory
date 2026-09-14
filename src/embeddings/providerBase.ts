@@ -206,15 +206,14 @@ abstract class EmbeddingProviderBase {
                 errorType: errorCategory,
                 errorMessage: error.message,
                 textLength: text.length,
-                hasApiKey: !!config.GEMINI_API_KEY,
-                fallbackProvider: "FastEmbed"
+                hasApiKey: !!config.GEMINI_API_KEY
             };
 
             console.error('Gemini summarization failed in embedding preprocessing:', errorInfo);
 
             // For certain error types, we could implement circuit breaker pattern here
             if (errorCategory === 'AUTHENTICATION_ERROR' || errorCategory === 'QUOTA_ERROR') {
-                console.error(`Gemini API permanently unavailable due to ${errorCategory}. FastEmbed will be used for embeddings.`);
+                console.error(`Gemini API permanently unavailable due to ${errorCategory}.`);
             }
         }
 
