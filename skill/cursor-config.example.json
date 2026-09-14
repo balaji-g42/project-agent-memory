@@ -1,16 +1,17 @@
 {
   "mcpServers": {
-    "memory-qdrant-mcp": {
+    "memory": {
       "command": "npx",
       "args": [
         "-y",
         "memory-qdrant-mcp"
       ],
       "env": {
-        "QDRANT_URL": "https://qdrant.geekscodebase.me",
-        "QDRANT_API_KEY": "your-qdrant-api-key-here",
-        "EMBEDDING_PROVIDER": "openrouter",
-        "EMBEDDING_MODEL": "qwen/qwen3-embedding-8b",
+        "QDRANT_URL": "http://localhost:6333",
+        "QDRANT_API_KEY": "",
+        "EMBEDDING_PROVIDER": "onnx",
+        "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5",
+        "VECTOR_DIM": "768",
         "SUMMARIZER_PROVIDER": "openrouter",
         "SUMMARIZER_MODEL": "openai/gpt-oss-20b:free",
         "OPENROUTER_API_KEY": "your-openrouter-api-key-here"

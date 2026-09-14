@@ -1,6 +1,5 @@
 import { initMemoryBank, client } from "../init.js";
 import { v4 as uuidv4 } from "uuid";
-import config from "../config.js";
 import { embeddingCache, queryCache, contextCache, patternCache, cacheKeys, cacheUtils } from "../cache.js";
 import type { 
     MemoryType, 
@@ -9,37 +8,12 @@ import type {
     BatchContextUpdate,
     WorkspaceInfo,
     SyncSource,
-    ConversationMetadata,
     ProgressStatus,
     Priority,
     LinkDirection
 } from "../types.js";
 
-// Embedding providers
-import FastEmbedProvider from "../embeddings/fastEmbed.js";
-import OllamaProvider from "../embeddings/ollama.js";
-import GeminiVertexProvider from "../embeddings/geminiVertex.js";
-
-// Type definitions for embedding provider
-interface EmbeddingProvider {
-    embedTexts(texts: string[]): Promise<number[][]>;
-}
-
-// Lazy load embedding provider - correct priority: Gemini > Ollama > FastEmbed
-// OPENROUTER_API_KEY only affects summarization, not embeddings
-let embeddingProvider: EmbeddingProvider | undefined;
-function getEmbeddingProvider(): EmbeddingProvider {
-    if (!embeddingProvider) {
-        if (config.GEMINI_API_KEY) {
-            embeddingProvider = new GeminiVertexProvider();
-        } else if (process.env.OLLAMA_BASE_URL) {
-            embeddingProvider = new OllamaProvider();
-        } else {
-            embeddingProvider = new FastEmbedProvider();
-        }
-    }
-    return embeddingProvider;
-}
+import { getEmbeddingProvider } from "../embeddings.js";
 
 /**
  * Cached embedding generation with performance optimization
@@ -80,7 +54,7 @@ async function getCachedEmbeddings(texts: string[]): Promise<number[][]> {
     return results;
 }
 
-const MEMORY_TYPES: MemoryType[] = ["productContext", "activeContext", "systemPatterns", "decisionLog", "progress", "contextHistory", "customData"];
+const MEMORY_TYPES: MemoryType[] = ["productContext", "activeContext", "systemPatterns", "decisionLog", "progress", "contextHistory", "customData", "knowledgeLink"];
 
 // Context structured context types
 const STRUCTURED_CONTEXT_TYPES: ("productContext" | "activeContext")[] = ["productContext", "activeContext"];
@@ -96,6 +70,22 @@ interface QueryResult {
     content: string;
     type: string;
     timestamp: string;
+    metadata: Record<string, any>;
+}
+
+interface GraphEdgeInput {
+    from_id: string;
+    to_id: string;
+    relation: string;
+    description?: string;
+}
+
+interface NeighborResult {
+    id: string;
+    depth: number;
+    via: string;
+    content: string;
+    type: string;
 }
 
 interface DecisionResult {
@@ -213,24 +203,6 @@ interface ImportResult {
     timestamp: string;
 }
 
-interface AnalysisDecision {
-    content: string;
-    confidence: number;
-}
-
-interface AnalysisProgress {
-    content: string;
-    status: string;
-}
-
-interface AnalysisResults {
-    decisions: AnalysisDecision[];
-    progress: AnalysisProgress[];
-    questions: string[];
-    insights: string[];
-    timestamp: string;
-}
-
 interface CacheStats {
     embeddingCache: {
         size: number;
@@ -251,7 +223,7 @@ interface CacheStats {
 }
 
 // ----- Log memory entry -----
-async function logMemory(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null): Promise<string> {
+async function logMemory(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null, metadata: Record<string, any> = {}): Promise<string> {
     if (!MEMORY_TYPES.includes(memoryType)) {
         throw new Error(`Invalid memory type: ${memoryType}`);
     }
@@ -270,6 +242,7 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
         payload: {
             type: memoryType,
             content,
+            metadata,
             timestamp: new Date().toISOString(),
             project: projectName
         }
@@ -284,9 +257,18 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
 }
 
 // ----- Query memory -----
-async function queryMemory(projectName: string, queryText: string, memoryType: string | null = null, topK: number = 5): Promise<QueryResult[]> {
+function metadataFilterClauses(metadataFilter: Record<string, any> | null): any[] {
+    if (!metadataFilter) return [];
+    return Object.entries(metadataFilter).map(([key, value]) => (
+        Array.isArray(value)
+            ? { key: `metadata.${key}`, match: { any: value } }
+            : { key: `metadata.${key}`, match: { value } }
+    ));
+}
+
+async function queryMemory(projectName: string, queryText: string, memoryType: string | null = null, topK: number = 5, metadataFilter: Record<string, any> | null = null): Promise<QueryResult[]> {
     // Check cache first
-    const cacheKey = cacheKeys.query(projectName, queryText, memoryType || undefined, topK);
+    const cacheKey = cacheKeys.query(projectName, queryText, memoryType || undefined, topK) + (metadataFilter ? `:${JSON.stringify(metadataFilter)}` : "");
     const cachedResult = cacheUtils.getCached(queryCache, cacheKey);
     if (cachedResult) {
         return cachedResult;
@@ -301,6 +283,7 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
     // Build filter
     const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
     if (memoryType) mustFilter.push({ key: "type", match: { value: memoryType } });
+    mustFilter.push(...metadataFilterClauses(metadataFilter));
 
     const results = await client.search(collectionName, {
         vector,
@@ -313,13 +296,88 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
         score: hit.score,
         content: hit.payload?.content,
         type: hit.payload?.type,
-        timestamp: hit.payload?.timestamp
+        timestamp: hit.payload?.timestamp,
+        metadata: hit.payload?.metadata ?? {}
     }));
 
     // Cache the results
     cacheUtils.setCached(queryCache, cacheKey, formattedResults);
 
     return formattedResults;
+}
+
+async function listMemory(projectName: string, memoryType: string | null = null, limit: number = 20, metadataFilter: Record<string, any> | null = null): Promise<QueryResult[]> {
+    const collectionName = await initMemoryBank(projectName);
+
+    const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
+    if (memoryType) mustFilter.push({ key: "type", match: { value: memoryType } });
+    mustFilter.push(...metadataFilterClauses(metadataFilter));
+
+    const response = await client.scroll(collectionName, {
+        filter: { must: mustFilter },
+        limit,
+        with_payload: true,
+        with_vector: false
+    });
+
+    return response.points
+        .map((point: any) => ({
+            id: point.id,
+            score: 0,
+            content: point.payload?.content,
+            type: point.payload?.type,
+            timestamp: point.payload?.timestamp,
+            metadata: point.payload?.metadata ?? {}
+        }))
+        .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+}
+
+async function updateMemory(projectName: string, memoryId: string, content?: string, metadata?: Record<string, any>): Promise<boolean> {
+    const collectionName = await initMemoryBank(projectName);
+
+    const existing = await client.retrieve(collectionName, { ids: [memoryId], with_payload: true, with_vector: true });
+    if (existing.length === 0) {
+        throw new Error(`Memory ${memoryId} not found in project ${projectName}`);
+    }
+
+    const previous = existing[0];
+    const nextContent = content ?? String(previous.payload?.content ?? "");
+    const vector = content !== undefined
+        ? (await getCachedEmbeddings([content]))[0]
+        : previous.vector as number[];
+
+    const nextMetadata = metadata
+        ? { ...(previous.payload?.metadata as Record<string, any> ?? {}), ...metadata }
+        : previous.payload?.metadata ?? {};
+
+    await client.upsert(collectionName, {
+        points: [{
+            id: memoryId,
+            vector,
+            payload: {
+                ...previous.payload,
+                content: nextContent,
+                metadata: nextMetadata,
+                timestamp: new Date().toISOString()
+            }
+        }]
+    });
+
+    cacheUtils.invalidateProjectCache(projectName);
+    return true;
+}
+
+async function deleteMemory(projectName: string, memoryIds: string[]): Promise<number> {
+    const collectionName = await initMemoryBank(projectName);
+
+    const existing = await client.retrieve(collectionName, { ids: memoryIds, with_payload: false });
+    if (existing.length === 0) {
+        return 0;
+    }
+
+    await client.delete(collectionName, { points: existing.map(point => point.id) });
+    cacheUtils.invalidateProjectCache(projectName);
+    return existing.length;
 }
 
 // ----- Log structured memory entry (for ConPort contexts) -----
@@ -523,89 +581,130 @@ async function semanticSearch(projectName: string, queryText: string, limit: num
 }
 
 // ----- Knowledge graph linking -----
-async function createKnowledgeLink(projectName: string, sourceId: string, targetId: string, linkType: string, description: string = ""): Promise<string> {
+const MAX_GRAPH_EDGES = 10000;
+
+async function createKnowledgeLink(projectName: string, edges: GraphEdgeInput[]): Promise<KnowledgeLink[]> {
     const collectionName = await initMemoryBank(projectName);
 
-    const linkContent = {
-        sourceId,
-        targetId,
-        linkType,
-        description,
-        timestamp: new Date().toISOString()
-    };
+    const timestamp = new Date().toISOString();
+    const contents = edges.map(edge =>
+        edge.description || `${edge.from_id} ${edge.relation} ${edge.to_id}`
+    );
+    const vectors = await getCachedEmbeddings(contents);
 
-    const contentString = JSON.stringify(linkContent);
-    const vector = (await getEmbeddingProvider().embedTexts([contentString]))[0];
-
-    const pointId = uuidv4();
-
-    const point = {
-        id: pointId,
-        vector,
+    const points = edges.map((edge, i) => ({
+        id: uuidv4(),
+        vector: vectors[i],
         payload: {
             type: "knowledgeLink",
-            content: contentString,
-            sourceId,
-            targetId,
-            linkType,
-            description,
-            timestamp: new Date().toISOString(),
+            content: contents[i],
+            metadata: {
+                sourceId: edge.from_id,
+                targetId: edge.to_id,
+                linkType: edge.relation
+            },
+            timestamp,
             project: projectName
         }
-    };
+    }));
 
-    await client.upsert(collectionName, { points: [point] });
-    return pointId;
+    await client.upsert(collectionName, { points });
+    cacheUtils.invalidateProjectCache(projectName);
+
+    return points.map(point => ({
+        id: point.id,
+        sourceId: point.payload.metadata.sourceId,
+        targetId: point.payload.metadata.targetId,
+        linkType: point.payload.metadata.linkType,
+        description: point.payload.content,
+        timestamp
+    }));
+}
+
+async function getAllKnowledgeLinks(projectName: string, linkType: string | null = null): Promise<KnowledgeLink[]> {
+    const collectionName = await initMemoryBank(projectName);
+
+    const mustFilter: any[] = [
+        { key: "project", match: { value: projectName } },
+        { key: "type", match: { value: "knowledgeLink" } }
+    ];
+    if (linkType) mustFilter.push({ key: "metadata.linkType", match: { value: linkType } });
+
+    const response = await client.scroll(collectionName, {
+        filter: { must: mustFilter },
+        limit: MAX_GRAPH_EDGES,
+        with_payload: true,
+        with_vector: false
+    });
+
+    return response.points.map((point: any) => ({
+        id: point.id,
+        sourceId: point.payload?.metadata?.sourceId,
+        targetId: point.payload?.metadata?.targetId,
+        linkType: point.payload?.metadata?.linkType,
+        description: point.payload?.content,
+        timestamp: point.payload?.timestamp
+    }));
 }
 
 async function getKnowledgeLinks(projectName: string, entityId: string, linkType: string | null = null, direction: LinkDirection = "both"): Promise<KnowledgeLink[]> {
-    const collectionName = `memory_bank_${projectName}`;
+    const links = await getAllKnowledgeLinks(projectName, linkType);
+    return links.filter(link =>
+        (direction !== "incoming" && link.sourceId === entityId) ||
+        (direction !== "outgoing" && link.targetId === entityId)
+    );
+}
 
-    try {
-        // First, check if collection exists and get basic knowledge links
-        const basicFilter: any = {
-            must: [
-                { key: "project", match: { value: projectName } },
-                { key: "type", match: { value: "knowledgeLink" } }
-            ]
-        };
+async function getNeighbors(projectName: string, entityId: string, linkType: string | null = null, depth: number = 1, direction: LinkDirection = "both"): Promise<NeighborResult[]> {
+    const links = await getAllKnowledgeLinks(projectName, linkType);
 
-        if (linkType) {
-            basicFilter.must.push({ key: "linkType", match: { value: linkType } });
+    const reached = new Map<string, { depth: number; via: string }>();
+    let frontier = [entityId];
+    const seen = new Set<string>([entityId]);
+
+    for (let level = 1; level <= depth && frontier.length > 0; level++) {
+        const next: string[] = [];
+        for (const link of links) {
+            const hops: [string, string][] = [];
+            if (direction !== "incoming" && frontier.includes(link.sourceId)) {
+                hops.push([link.targetId, link.linkType]);
+            }
+            if (direction !== "outgoing" && frontier.includes(link.targetId)) {
+                hops.push([link.sourceId, link.linkType]);
+            }
+            for (const [id, relation] of hops) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+                reached.set(id, { depth: level, via: relation });
+                next.push(id);
+            }
         }
-
-        // Get all knowledge links first
-        const allLinks = await client.search(collectionName, {
-            vector: (await getEmbeddingProvider().embedTexts(["knowledge links"]))[0],
-            limit: 100, // Get more to filter client-side
-            filter: basicFilter
-        });
-
-        // Filter client-side based on entityId and direction
-        const filteredResults = allLinks.filter((hit: any) => {
-            const payload = hit.payload;
-            if (direction === "outgoing" || direction === "both") {
-                if (payload?.sourceId === entityId) return true;
-            }
-            if (direction === "incoming" || direction === "both") {
-                if (payload?.targetId === entityId) return true;
-            }
-            return false;
-        });
-
-        return filteredResults.map((hit: any) => ({
-            id: hit.id,
-            sourceId: hit.payload?.sourceId,
-            targetId: hit.payload?.targetId,
-            linkType: hit.payload?.linkType,
-            description: hit.payload?.description,
-            timestamp: hit.payload?.timestamp
-        }));
-    } catch (error) {
-        // Fallback: return empty array on error
-        console.error("Error in getKnowledgeLinks:", error);
-        return [];
+        frontier = next;
     }
+
+    if (reached.size === 0) return [];
+
+    const collectionName = await initMemoryBank(projectName);
+    const points = await client.retrieve(collectionName, {
+        ids: [...reached.keys()],
+        with_payload: true,
+        with_vector: false
+    });
+
+    return points.map((point: any) => ({
+        id: String(point.id),
+        depth: reached.get(String(point.id))!.depth,
+        via: reached.get(String(point.id))!.via,
+        content: point.payload?.content,
+        type: point.payload?.type
+    })).sort((a, b) => a.depth - b.depth);
+}
+
+async function deleteKnowledgeLinks(projectName: string, linkIds: string[]): Promise<number> {
+    const collectionName = await initMemoryBank(projectName);
+    await client.delete(collectionName, { points: linkIds });
+    cacheUtils.invalidateProjectCache(projectName);
+    return linkIds.length;
 }
 
 // ----- Get context history -----
@@ -727,7 +826,8 @@ async function batchQueryMemory(projectName: string, queries: BatchQuery[]): Pro
                 score: hit.score,
                 content: hit.payload?.content,
                 type: hit.payload?.type,
-                timestamp: hit.payload?.timestamp
+                timestamp: hit.payload?.timestamp,
+                metadata: hit.payload?.metadata ?? {}
             }));
         });
 
@@ -1574,100 +1674,6 @@ function parseMarkdownToMemory(markdown: string): { sections: Record<string, any
 }
 
 /**
- * Analyze conversation and automatically log relevant information
- * @param projectName - Name of the project
- * @param conversationText - Conversation text to analyze
- * @param metadata - Additional metadata about the conversation
- * @returns Analysis results
- */
-async function analyzeConversation(projectName: string, conversationText: string, metadata: ConversationMetadata = {}): Promise<AnalysisResults> {
-    const analysisResults: AnalysisResults = {
-        decisions: [],
-        progress: [],
-        questions: [],
-        insights: [],
-        timestamp: new Date().toISOString()
-    };
-
-    // Simple pattern matching for conversation analysis
-    const lines = conversationText.split('\n');
-
-    for (const line of lines) {
-        const lowerLine = line.toLowerCase();
-
-        // Detect decisions
-        if (lowerLine.includes('decided') || lowerLine.includes('decision') || lowerLine.includes('will')) {
-            analysisResults.decisions.push({
-                content: line.trim(),
-                confidence: 0.8
-            });
-        }
-
-        // Detect progress updates
-        if (lowerLine.includes('completed') || lowerLine.includes('finished') || lowerLine.includes('done')) {
-            analysisResults.progress.push({
-                content: line.trim(),
-                status: 'completed'
-            });
-        }
-
-        // Detect questions
-        if (line.includes('?') || lowerLine.includes('what') || lowerLine.includes('how') || lowerLine.includes('why')) {
-            analysisResults.questions.push(line.trim());
-        }
-
-        // Detect insights or important information
-        if (lowerLine.includes('important') || lowerLine.includes('note') || lowerLine.includes('remember')) {
-            analysisResults.insights.push(line.trim());
-        }
-    }
-
-    // Log the analysis results
-    const entries: BatchLogEntry[] = [];
-
-    analysisResults.decisions.forEach(decision => {
-        entries.push({
-            memoryType: 'decisionLog',
-            content: decision.content
-        });
-    });
-
-    analysisResults.progress.forEach(progress => {
-        entries.push({
-            memoryType: 'progress',
-            content: progress.content
-        });
-    });
-
-    analysisResults.questions.forEach(question => {
-        entries.push({
-            memoryType: 'activeContext',
-            content: `Question: ${question}`
-        });
-    });
-
-    analysisResults.insights.forEach(insight => {
-        entries.push({
-            memoryType: 'systemPatterns',
-            content: insight
-        });
-    });
-
-    if (entries.length > 0) {
-        await batchLogMemory(projectName, entries);
-    }
-
-    // Store the conversation analysis itself
-    await storeCustomData(projectName, analysisResults, 'conversationAnalysis', {
-        conversationId: metadata.conversationId,
-        participants: metadata.participants,
-        source: metadata.source
-    });
-
-    return analysisResults;
-}
-
-/**
  * Get cache performance statistics
  * @returns Cache statistics
  */
@@ -1678,6 +1684,9 @@ function getCacheStats(): CacheStats {
 export {
     logMemory,
     queryMemory,
+    listMemory,
+    updateMemory,
+    deleteMemory,
     logStructuredMemory,
     getStructuredContext,
     updateStructuredContext,
@@ -1686,6 +1695,8 @@ export {
     semanticSearch,
     createKnowledgeLink,
     getKnowledgeLinks,
+    getNeighbors,
+    deleteKnowledgeLinks,
     getContextHistory,
     batchLogMemory,
     batchQueryMemory,
@@ -1705,6 +1716,5 @@ export {
     syncMemory,
     exportMemoryToMarkdown,
     importMemoryFromMarkdown,
-    analyzeConversation,
     getCacheStats
 };

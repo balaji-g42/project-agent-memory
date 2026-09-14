@@ -1,6 +1,6 @@
 {
   "name": "memory-qdrant-mcp",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -37,6 +37,7 @@
   "homepage": "https://github.com/balaji-g42/memory-qdrant-mcp.git",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@huggingface/transformers": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@qdrant/js-client-rest": "^1.15.1",
     "axios": "^1.12.1",

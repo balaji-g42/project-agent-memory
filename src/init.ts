@@ -29,12 +29,33 @@ const client = new QdrantClient({
     checkCompatibility: false
 });
 
+function readVectorSize(params: unknown): number | undefined {
+    const vectors = (params as { vectors?: unknown })?.vectors;
+    if (!vectors || typeof vectors !== "object") return undefined;
+    const size = (vectors as { size?: unknown }).size;
+    return typeof size === "number" ? size : undefined;
+}
+
 async function initMemoryBank(projectName: string): Promise<string> {
     const collectionName = `memory_bank_${projectName}`;
 
     // Check if collection exists
     const existingCollections = await client.getCollections();
-    const exists = existingCollections.collections.some(c => c.name === collectionName);
+    let exists = existingCollections.collections.some(c => c.name === collectionName);
+
+    if (exists) {
+        const info = await client.getCollection(collectionName);
+        const currentSize = readVectorSize(info.config?.params);
+        if (currentSize !== undefined && currentSize !== config.VECTOR_DIM) {
+            console.error(
+                `WARNING: collection ${collectionName} has vector size ${currentSize} but VECTOR_DIM=${config.VECTOR_DIM}. ` +
+                `Recreating the collection - all stored memories in it will be permanently deleted. ` +
+                `Set VECTOR_DIM=${currentSize} instead if you want to keep them.`
+            );
+            await client.deleteCollection(collectionName);
+            exists = false;
+        }
+    }
 
     if (!exists) {
         await client.createCollection(collectionName, {

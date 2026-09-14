@@ -2,12 +2,10 @@ import EmbeddingProviderBase from "./providerBase.js";
 import config from "../config.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { GenerativeModel } from "@google/generative-ai";
-import FastEmbedProvider from "./fastEmbed.js";
 
 class GeminiVertexProvider extends EmbeddingProviderBase {
     private genAI: GoogleGenerativeAI;
     private embeddingModel: GenerativeModel;
-    private fastEmbedFallback: FastEmbedProvider;
 
     constructor() {
         super();
@@ -15,37 +13,28 @@ class GeminiVertexProvider extends EmbeddingProviderBase {
         this.genAI = new GoogleGenerativeAI(config.GEMINI_API_KEY);
         const modelName = config.EMBEDDING_MODEL || "models/gemini-embedding-001";
         this.embeddingModel = this.genAI.getGenerativeModel({ model: modelName });
-        this.fastEmbedFallback = new FastEmbedProvider();
     }
 
     async embedTexts(texts: string[]): Promise<number[][]> {
         const results: number[][] = [];
 
         for (const txt of texts) {
-            try {
-                const processedText = await this.preprocessText(txt);
+            const processedText = await this.preprocessText(txt);
 
-                // Handle chunked text (array of strings)
-                if (Array.isArray(processedText)) {
-                    const chunkEmbeddings: number[][] = [];
-                    for (const chunk of processedText) {
-                        const result = await this.embeddingModel.embedContent(chunk);
-                        chunkEmbeddings.push(result.embedding.values);
-                    }
-                    // Average the chunk embeddings to get a single embedding
-                    const avgEmbedding = this.averageEmbeddings(chunkEmbeddings);
-                    results.push(avgEmbedding);
-                } else {
-                    // Handle single text (string)
-                    const result = await this.embeddingModel.embedContent(processedText);
-                    results.push(result.embedding.values);
+            // Handle chunked text (array of strings)
+            if (Array.isArray(processedText)) {
+                const chunkEmbeddings: number[][] = [];
+                for (const chunk of processedText) {
+                    const result = await this.embeddingModel.embedContent(chunk);
+                    chunkEmbeddings.push(result.embedding.values);
                 }
-            } catch (error) {
-                const err = error as Error;
-                console.error(`Gemini embedding failed for text: ${err.message}, falling back to FastEmbed`);
-                // Fallback to FastEmbed if Gemini fails
-                const fallbackEmbeddings = await this.fastEmbedFallback.embedTexts([txt]);
-                results.push(fallbackEmbeddings[0]);
+                // Average the chunk embeddings to get a single embedding
+                const avgEmbedding = this.averageEmbeddings(chunkEmbeddings);
+                results.push(avgEmbedding);
+            } else {
+                // Handle single text (string)
+                const result = await this.embeddingModel.embedContent(processedText);
+                results.push(result.embedding.values);
             }
         }
         return results;

@@ -1,18 +1,15 @@
 import EmbeddingProviderBase from "./providerBase.js";
 import config from "../config.js";
 import OpenAI from "openai";
-import FastEmbedProvider from "./fastEmbed.js";
 
 class OpenRouterProvider extends EmbeddingProviderBase {
     private client: OpenAI;
     private model: string;
-    private fastEmbedFallback: FastEmbedProvider;
 
     constructor() {
         super();
         this.model = config.EMBEDDING_MODEL || "qwen/qwen3-embedding-8b";
-        this.fastEmbedFallback = new FastEmbedProvider();
-        
+
         if (!config.OPENROUTER_API_KEY) {
             throw new Error("OPENROUTER_API_KEY is required for OpenRouter provider");
         }
@@ -31,30 +28,22 @@ class OpenRouterProvider extends EmbeddingProviderBase {
         const embeddings: number[][] = [];
 
         for (const text of texts) {
-            try {
-                const processedText = await this.preprocessText(text);
+            const processedText = await this.preprocessText(text);
 
-                // Handle chunked text (array of strings)
-                if (Array.isArray(processedText)) {
-                    const chunkEmbeddings: number[][] = [];
-                    for (const chunk of processedText) {
-                        const embedding = await this.callOpenRouterEmbedding(chunk);
-                        chunkEmbeddings.push(embedding);
-                    }
-                    // Average the chunk embeddings
-                    const avgEmbedding = this.averageEmbeddings(chunkEmbeddings);
-                    embeddings.push(avgEmbedding);
-                } else {
-                    // Handle single text (string)
-                    const embedding = await this.callOpenRouterEmbedding(processedText);
-                    embeddings.push(embedding);
+            // Handle chunked text (array of strings)
+            if (Array.isArray(processedText)) {
+                const chunkEmbeddings: number[][] = [];
+                for (const chunk of processedText) {
+                    const embedding = await this.callOpenRouterEmbedding(chunk);
+                    chunkEmbeddings.push(embedding);
                 }
-            } catch (error) {
-                const err = error as Error;
-                console.error(`OpenRouter embedding failed for text: ${err.message}, falling back to FastEmbed`);
-                // Fallback to FastEmbed if OpenRouter fails
-                const fallbackEmbeddings = await this.fastEmbedFallback.embedTexts([text]);
-                embeddings.push(fallbackEmbeddings[0]);
+                // Average the chunk embeddings
+                const avgEmbedding = this.averageEmbeddings(chunkEmbeddings);
+                embeddings.push(avgEmbedding);
+            } else {
+                // Handle single text (string)
+                const embedding = await this.callOpenRouterEmbedding(processedText);
+                embeddings.push(embedding);
             }
         }
 

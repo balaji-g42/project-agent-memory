@@ -1,6 +1,6 @@
 # Memory Qdrant MCP Agent Skill
 
-A Claude Agent Skill that provides persistent memory management capabilities using Qdrant vector database. This Skill enables Claude to remember context, decisions, progress, and patterns across multiple conversations.
+A Claude Agent Skill for persistent project memory backed by Qdrant. It lets Claude carry context, decisions, progress and patterns across conversations.
 
 ## What is an Agent Skill?
 
@@ -13,32 +13,18 @@ Learn more: [Agent Skills Documentation](https://docs.anthropic.com/en/docs/agen
 ```
 skill/
 ├── SKILL.md              # Main skill (YAML frontmatter + instructions)
-├── API-REFERENCE.md      # Complete tool reference (35 tools)
-├── MCP-CONFIG.md         # Configuration guide  
+├── API-REFERENCE.md      # Tool reference (7 tools)
+├── MCP-CONFIG.md         # Configuration guide
 ├── README.md             # This file
 └── *.example.json        # MCP server config templates
 ```
 
 **Progressive Loading:**
-- **Level 1**: SKILL.md metadata (~100 tokens, always loaded)
+- **Level 1**: SKILL.md metadata (always loaded)
 - **Level 2**: SKILL.md instructions (loaded when triggered)
 - **Level 3+**: Supporting files (loaded as referenced)
 
 ## Installation
-
-### Claude.ai
-
-1. **Create zip file:**
-   ```bash
-   cd skill
-   zip -r ../memory-qdrant-mcp-skill.zip .
-   ```
-
-2. **Upload to Claude.ai:**
-   - Settings → Features → Skills
-   - Upload `memory-qdrant-mcp-skill.zip`
-
-**Note:** Skills are per-user, not organization-wide.
 
 ### Claude Code
 
@@ -56,167 +42,104 @@ cp skill/* ~/.claude/skills/memory-qdrant-mcp/
 
 Claude Code auto-discovers filesystem-based Skills.
 
-### Claude API
+### Claude.ai
 
-```bash
-# Create and encode zip
-cd skill && zip -r ../memory-qdrant-mcp.zip . && cd ..
-SKILL_DATA=$(base64 memory-qdrant-mcp.zip)
+1. Zip the skill directory:
+   ```bash
+   cd skill && zip -r ../memory-qdrant-mcp-skill.zip .
+   ```
+2. Settings → Features → Skills → upload the zip.
 
-# Upload via API
-curl -X POST https://api.anthropic.com/v1/skills \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-beta: skills-2025-10-02" \
-  -H "Content-Type: application/json" \
-  -d "{\"name\": \"memory-qdrant-mcp\", \"skill_data\": \"$SKILL_DATA\"}"
-```
-
-**Use in API calls:**
-```python
-import anthropic
-
-client = anthropic.Anthropic(api_key="your-key")
-
-response = client.messages.create(
-    model="claude-sonnet-4-20250514",
-    max_tokens=4096,
-    betas=["code-execution-2025-08-25", "skills-2025-10-02"],
-    tools=[{"type": "code-execution", "container": {"skills": ["memory-qdrant-mcp"]}}],
-    messages=[{"role": "user", "content": "Remember that we chose PostgreSQL"}]
-)
-```
+Skills are per-user, not organization-wide.
 
 ### Agent SDK
 
-Copy to SDK skills directory:
 ```bash
 mkdir -p .claude/skills/memory-qdrant-mcp
 cp skill/* .claude/skills/memory-qdrant-mcp/
 ```
 
-Enable in SDK configuration:
-```typescript
-{
-  "allowed_tools": ["Skill"],
-  // SDK will auto-discover .claude/skills/
-}
-```
+The SDK auto-discovers `.claude/skills/`.
 
 ## MCP Server Configuration
 
-This Skill works with the Memory Qdrant MCP server. Configure the server separately:
+The skill is the instructions; the tools come from the MCP server, configured separately.
 
 **Example configuration files included:**
-- `claude-config.example.json` - For Claude Desktop
-- `vscode-mcp-config.example.json` - For VS Code
-- `cursor-config.example.json` - For Cursor IDE
+- `claude-config.example.json` - Claude Code / Claude Desktop
+- `vscode-mcp-config.example.json` - VS Code
+- `cursor-config.example.json` - Cursor
 
-**See [MCP-CONFIG.md](MCP-CONFIG.md) for complete setup instructions.**
+Minimum config - the server runs via `npx`, embeds locally with ONNX, and needs only a reachable Qdrant:
 
-## Quick Start
-
-Once installed, Claude can use memory management automatically:
-
-```
-User: Remember that we decided to use JWT for authentication
-
-Claude: [uses log_decision tool to store this]
-
----
-
-User: What did we decide about authentication?
-
-Claude: [uses query_memory to recall the decision]
-Based on your previous decision, you chose JWT for authentication.
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "memory-qdrant-mcp"],
+      "env": { "QDRANT_URL": "http://localhost:6333" }
+    }
+  }
+}
 ```
 
-## Capabilities
+**See [MCP-CONFIG.md](MCP-CONFIG.md) for the full environment-variable reference.**
 
-This Skill provides 35 tools organized into 11 categories:
+## Tools
 
-### Core Operations
-- **Memory Management**: Store and retrieve any information with semantic search
-- **Context Management**: Maintain product overview and active work state
-- **Decision Logging**: Track important decisions with rationale
-- **Progress Tracking**: Monitor tasks with status (pending/in_progress/completed/blocked)
+Seven tools, all taking `project_name`:
 
-### Advanced Features
-- **Semantic Search**: Find information using natural language
-- **Knowledge Graphs**: Link related concepts and decisions
-- **System Patterns**: Store architectural standards and coding conventions
-- **Custom Data**: Store arbitrary structured data with search
-- **Batch Operations**: Efficiently process multiple items
-- **Import/Export**: Backup memory to Markdown
-- **Conversation Analysis**: Extract insights and action items
+| Tool | Purpose |
+|------|---------|
+| `memory_create` | Store entries (`items[]`) of a given memory type, with optional filterable `metadata` |
+| `memory_read` | Run one or more queries (`queries[]`): semantic search (`query_text`) or list by recency |
+| `memory_update` | Update entries by id (`items[]`), re-embedding when content changes |
+| `memory_delete` | Permanently delete entries by id |
+| `memory_context` | Read, and optionally patch, product context / active context / system patterns |
+| `memory_graph` | `link` / `neighbors` / `unlink` - typed edges between entries and traversal over them |
+| `memory_admin` | `export` / `import` / `summarize` |
 
-**See [SKILL.md](SKILL.md) for usage instructions and [API-REFERENCE.md](API-REFERENCE.md) for complete tool documentation.**
+The four CRUD tools take arrays, so a single write and a batch write are the same call.
+
+`memory_type` is one of: `productContext`, `activeContext`, `systemPatterns`, `decisionLog`, `progress`, `contextHistory`, `customData`, `knowledgeLink`.
+
+**See [SKILL.md](SKILL.md) for usage guidance and [API-REFERENCE.md](API-REFERENCE.md) for parameters and return shapes.**
 
 ## Common Workflows
 
-### Initialize Project
-```python
-use_mcp_tool("memory-qdrant-mcp", "initialize_workspace", {
-    "project_name": "my-app",
-    "workspace_info": {"tech_stack": ["React", "Node.js"]}
-})
+### Session start
+```json
+{ "tool": "memory_context", "project_name": "my-app" }
+```
+Returns product context, active context and system patterns. Initializes the workspace if it is empty.
+
+### Record a decision
+```json
+{ "tool": "memory_create", "project_name": "my-app",
+  "items": [{ "memory_type": "decisionLog", "content": "Using PostgreSQL - already self-hosted, no new service" }] }
 ```
 
-### Store Information
-```python
-use_mcp_tool("memory-qdrant-mcp", "log_memory", {
-    "project_name": "my-app",
-    "memory_type": "decision",
-    "content": "Using PostgreSQL for the database"
-})
+### Recall
+```json
+{ "tool": "memory_read", "project_name": "my-app", "queries": [{ "query_text": "which database", "limit": 3 }] }
 ```
 
-### Recall Context
-```python
-results = use_mcp_tool("memory-qdrant-mcp", "query_memory", {
-    "project_name": "my-app",
-    "query_text": "What database are we using?",
-    "top_k": 3
-})
+### Link related memories
+```json
+{ "tool": "memory_graph", "project_name": "my-app", "op": "link",
+  "edges": [{ "from_id": "3f2a...", "to_id": "9c11...", "relation": "caused_by" }] }
 ```
 
-### Track Progress
-```python
-use_mcp_tool("memory-qdrant-mcp", "log_progress", {
-    "project_name": "my-app",
-    "progress_text": "Completed authentication module"
-})
+### Update the current focus
+```json
+{ "tool": "memory_context", "project_name": "my-app",
+  "active_context": { "focus": "auth module", "next": ["token refresh"] } }
 ```
-
-## Configuration Requirements
-
-The MCP server requires these environment variables:
-
-**Required:**
-```env
-QDRANT_URL=https://your-qdrant-instance.com
-QDRANT_API_KEY=your_key
-```
-
-**Optional (with defaults):**
-```env
-EMBEDDING_PROVIDER=openrouter  # or gemini, ollama, fastembed
-EMBEDDING_MODEL=qwen/qwen3-embedding-8b
-SUMMARIZER_PROVIDER=openrouter  # or gemini, ollama
-SUMMARIZER_MODEL=openai/gpt-oss-20b:free
-OPENROUTER_API_KEY=your_key
-```
-
-**Provider Options:**
-- **OpenRouter**: Cloud, requires API key (recommended)
-- **Gemini**: Google AI, requires API key
-- **Ollama**: Local or cloud, optional API key
-- **FastEmbed**: Local, no API key (automatic fallback)
 
 ## Testing
 
-Test with MCP Inspector:
 ```bash
-cd /path/to/memory-qdrant-mcp
 npm run build
 npx @modelcontextprotocol/inspector node dist/index.js
 ```
@@ -225,60 +148,30 @@ Opens http://localhost:6274 for interactive tool testing.
 
 ## Best Practices
 
-1. **Consistent Project Names**: Use same `project_name` across operations (case-sensitive)
-
-2. **Descriptive Memory Types**: Use clear types like:
-   - `conversation` - Chat discussions
-   - `codeContext` - Code structure notes
-   - `architecture` - Design decisions
-   - `decision` - Specific decisions
-
-3. **Update Context Regularly**: 
-   - `product_context` for long-term project info
-   - `active_context` for current work focus
-
-4. **Use Batch Operations**: When processing multiple items:
-   - `batch_log_memory`
-   - `batch_query_memory`
-   - `batch_update_context`
-
-5. **Leverage Semantic Search**: Use `semantic_search` for broad queries, understands meaning not just keywords
-
-6. **Track Progress with Status**: Maintain task board with status updates
-
-7. **Export Regularly**: Backup memory to Markdown periodically
+1. **Consistent project names.** Same `project_name` everywhere; it is case-sensitive and decides the collection.
+2. **Search the symptom, not a summary.** `memory_read` matches on meaning - query the words you would actually type when hitting the problem.
+3. **Use list mode for browsing.** Omitting `query_text` lists by recency and embeds nothing, so it costs no model time.
+4. **Keep entries short and single-idea.** One decision or one pattern per entry; long blobs retrieve poorly.
+5. **Write as things settle**, not batched at the end of a session.
+6. **Patterns as `SYMPTOM -> CAUSE -> FIX`**, one line each, so a search on the symptom matches.
 
 ## Troubleshooting
 
-### Skill Not Available
+### Skill not available
 
-**Claude.ai:**
-- Check Settings → Features → Skills
-- Verify zip uploaded successfully
-- Skills are per-user, each team member must upload
+**Claude Code:** check `.claude/skills/memory-qdrant-mcp/SKILL.md` exists, the YAML frontmatter is valid, then restart.
 
-**Claude Code:**
-- Check `.claude/skills/memory-qdrant-mcp/SKILL.md` exists
-- Verify YAML frontmatter is valid
-- Restart Claude Code
+**Claude.ai:** Settings → Features → Skills; each user uploads their own copy.
 
-**Claude API:**
-- Verify skill uploaded via Skills API
-- Check skill_id in API response
-- Include correct betas in API call
+### MCP server connection errors
 
-### MCP Server Connection Errors
+Verify the server entry in the client config, check `QDRANT_URL` / `QDRANT_API_KEY`, and test with MCP Inspector. See [MCP-CONFIG.md](MCP-CONFIG.md).
 
-- Verify MCP server is configured separately
-- Check QDRANT_URL and QDRANT_API_KEY
-- Test with MCP Inspector
-- See [MCP-CONFIG.md](MCP-CONFIG.md)
+### Memory not found
 
-### Memory Not Found
-
-- Ensure `project_name` matches exactly (case-sensitive)
-- Verify memory was logged successfully
-- Check Qdrant collection exists
+- `project_name` must match exactly (case-sensitive).
+- Check the `memory_bank_<project_name>` collection exists in Qdrant.
+- If `VECTOR_DIM` changed, the collection was recreated empty and the old entries are gone - see the warning in MCP-CONFIG.md.
 
 ## Security
 
@@ -288,19 +181,19 @@ Opens http://localhost:6274 for interactive tool testing.
 - Review all markdown files (SKILL.md, API-REFERENCE.md, etc.)
 - Check for unexpected external URLs or network calls
 - Verify no sensitive data exposure
-- Test in safe environment first
 
 **API Keys:**
 - Never commit keys to version control
 - Use environment variables
 - Rotate keys regularly
-- Use different keys for dev/prod
+
+With the default `onnx` provider no API key is needed at all - embeddings run in-process and nothing leaves the machine except the Qdrant writes.
 
 ## Documentation
 
-- **[SKILL.md](SKILL.md)** - Main usage instructions and workflows
-- **[API-REFERENCE.md](API-REFERENCE.md)** - Complete tool reference (35 tools)
-- **[MCP-CONFIG.md](MCP-CONFIG.md)** - MCP server configuration guide
+- **[SKILL.md](SKILL.md)** - Usage instructions and workflows
+- **[API-REFERENCE.md](API-REFERENCE.md)** - Tool reference (7 tools)
+- **[MCP-CONFIG.md](MCP-CONFIG.md)** - Configuration guide
 
 ## Resources
 
@@ -315,4 +208,4 @@ MIT License
 
 ## Version
 
-2.0.0 (TypeScript)
+3.0.0

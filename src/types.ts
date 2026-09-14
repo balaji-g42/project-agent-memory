@@ -12,6 +12,10 @@ export interface Config {
     OPENROUTER_API_KEY: string;
     OLLAMA_API_URL: string;
     OLLAMA_API_KEY: string;
+    ONNX_MODEL_CACHE_DIR: string;
+    ONNX_DTYPE: string;
+    OPENAI_BASE_URL: string;
+    OPENAI_API_KEY: string;
     QDRANT_URL: string;
     QDRANT_API_KEY: string | null;
     QDRANT_POOL_SIZE: number;
@@ -52,8 +56,9 @@ export type MemoryType =
     | "systemPatterns" 
     | "decisionLog" 
     | "progress" 
-    | "contextHistory" 
-    | "customData";
+    | "contextHistory"
+    | "customData"
+    | "knowledgeLink";
 
 export interface BatchLogEntry {
     memoryType: MemoryType;
