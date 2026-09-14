@@ -228,9 +228,158 @@ Edges are stored in the same collection as ordinary points of type `knowledgeLin
 
 Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-REFERENCE.md).
 
-### Migrating from v2.x
+### Migrating from memory-qdrant-mcp v2.x
 
-v3.0 condenses the 35 v2 tools into these 7; the per-tool mapping is in [`skill/SKILL.md`](skill/SKILL.md).
+The package was renamed `memory-qdrant-mcp` → `project-agent-memory` at v3.0. Same server, same Qdrant collections (`memory_bank_<project>` in both versions), so **your existing data carries over untouched** - only the package name, the tool surface and some config keys change.
+
+**1. Tools: 35 → 7.** Every v2 tool name is gone. The per-tool mapping is in [`skill/SKILL.md`](skill/SKILL.md).
+
+**2. Config keys.** Everything not listed here is unchanged.
+
+| v2.x | v3.0 | Notes |
+|------|------|-------|
+| `QDRANT_POOL_SIZE` | `POOL_SIZE` | Old name still read as a fallback; applies to whichever backend `MEMORY_BACKEND` selects |
+| `DEFAULT_TOP_K_MEMORY_QUERY` | *(removed)* | No longer read. Pass `limit` per query in `memory_read` instead |
+| `EMBEDDING_PROVIDER=fastembed` | `EMBEDDING_PROVIDER=onnx` | `onnx` is the new default and runs in-process on CPU |
+| `EMBEDDING_PROVIDER=ollama` | `EMBEDDING_PROVIDER=openai` + `OPENAI_BASE_URL=http://localhost:11434/v1` | Ollama is now reached through the OpenAI-compatible provider. `OLLAMA_API_URL` still exists but only drives the **summarizer** |
+| `EMBEDDING_MODEL=qwen/qwen3-embedding-8b` | `EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5` | New default, 768 dims |
+| `VECTOR_DIM` default `3072` | default `768` | **Read the warning below before you start the v3 server** |
+| *(none)* | `MEMORY_BACKEND` | Defaults to `qdrant`, so a v2 deployment needs no change |
+
+**`VECTOR_DIM` is the one that will bite you.** If your v2 collections were built at 3072 and you start v3 without setting `VECTOR_DIM`, the server sees 768 against a 3072 collection, warns on stderr, then **deletes and recreates that collection empty**. Either pin `VECTOR_DIM` (and `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`) to what v2 used, or accept the wipe and re-ingest. There is no in-place re-embedding path.
+
+**3. Update the MCP registration.** The command changes in both deployment shapes.
+
+Local (embeddings computed on this machine, Qdrant on localhost):
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "project-agent-memory"],
+      "env": {
+        "QDRANT_URL": "http://localhost:6333",
+        "VECTOR_DIM": "768",
+        "EMBEDDING_PROVIDER": "onnx",
+        "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5"
+      }
+    }
+  }
+}
+```
+
+Self-hosted / cloud Qdrant (remote instance, API key, embeddings still local):
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "project-agent-memory"],
+      "env": {
+        "MEMORY_BACKEND": "qdrant",
+        "QDRANT_URL": "https://qdrant.example.com",
+        "QDRANT_API_KEY": "...",
+        "POOL_SIZE": "10",
+        "VECTOR_DIM": "768",
+        "DISTANCE_METRIC": "Cosine",
+        "EMBEDDING_PROVIDER": "onnx",
+        "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5",
+        "ONNX_DTYPE": "q8",
+        "SUMMARIZER_PROVIDER": "openrouter",
+        "SUMMARIZER_MODEL": "openai/gpt-oss-20b:free",
+        "OPENROUTER_API_KEY": "..."
+      }
+    }
+  }
+}
+```
+
+On Windows, `"command": "npx"` may need to be `"command": "cmd", "args": ["/c", "npx", "-y", "project-agent-memory"]`.
+
+**4. If you want to land on the Postgres backend instead.** v2 had no Postgres backend - it was Qdrant-only - so this is an upgrade *and* a backend switch, and the data has to be copied across. Do it in this order:
+
+*a. Decide the embedding model first.* This is the whole difficulty. The migration script copies vectors verbatim; it does not re-embed. v2's default was `qwen/qwen3-embedding-8b` at 3072 dims, v3's is `nomic-ai/nomic-embed-text-v1.5` at 768. Vectors from two different models are not comparable, so if you migrate 3072-dim v2 points into a 768-dim collection and then let v3 write new memories with `onnx`, every similarity score between the old and new rows is meaningless - searches will look like they work and quietly rank wrong. Pick one:
+
+| | Do this | Cost |
+|---|---|---|
+| **Keep v2's embeddings** | Set `VECTOR_DIM=3072` and the same `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL` v2 used, then migrate | v2's `fastembed` and `ollama` embedding providers don't exist in v3, so this only works if v2 used `openrouter` or `gemini` |
+| **Re-embed on v3 (recommended)** | Start clean on `onnx`/768 and re-ingest the content you care about | You lose v2 history you don't re-enter |
+
+Migrating anyway and re-embedding later is possible - `memory_update` re-embeds the row it touches - but there is no bulk re-embed command.
+
+*b. Stand up Postgres + pgvector + pREST* as in [PostgreSQL / pgvector (via pREST)](#postgresql--pgvector-via-prest) above. No manual DDL: the migration script creates the `vector` extension, `memory_collections`, `memory_points`, the indexes and the registered pREST queries itself, and is idempotent.
+
+*c. Copy the data.* Point ids and payloads are preserved 1:1; re-running is an upsert, so a failed run is safe to repeat.
+
+```bash
+node skill/migrate-qdrant-to-pgvector.mjs --project <your-project> \
+  --qdrant-url https://qdrant.example.com --qdrant-api-key ... \
+  --prest-url http://localhost:3000 --prest-jwt-key change-me \
+  --vector-dim 3072 \
+  --dry-run
+```
+
+Drop `--dry-run` once the reported counts look right. Use `--all` instead of `--project` to move every collection on the Qdrant server in one pass. Full flag list via `--help`.
+
+*d. Switch the MCP registration* to the Postgres backend. Local:
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "project-agent-memory"],
+      "env": {
+        "MEMORY_BACKEND": "postgres",
+        "PREST_URL": "http://localhost:3000",
+        "PREST_JWT_KEY": "change-me",
+        "PREST_REGISTER_ADMIN": "admin",
+        "PREST_DATABASE": "memory",
+        "VECTOR_DIM": "768",
+        "EMBEDDING_PROVIDER": "onnx",
+        "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5"
+      }
+    }
+  }
+}
+```
+
+Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens a Postgres TCP connection of its own):
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "project-agent-memory"],
+      "env": {
+        "MEMORY_BACKEND": "postgres",
+        "PREST_URL": "https://prest.example.com",
+        "PREST_JWT_KEY": "...",
+        "PREST_REGISTER_ADMIN": "admin",
+        "PREST_DATABASE": "memory",
+        "POOL_SIZE": "10",
+        "VECTOR_DIM": "768",
+        "DISTANCE_METRIC": "Cosine",
+        "EMBEDDING_PROVIDER": "onnx",
+        "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5",
+        "ONNX_DTYPE": "q8",
+        "SUMMARIZER_PROVIDER": "openrouter",
+        "SUMMARIZER_MODEL": "openai/gpt-oss-20b:free",
+        "OPENROUTER_API_KEY": "..."
+      }
+    }
+  }
+}
+```
+
+`PREST_JWT_KEY` must be the same key pREST itself was started with. `QDRANT_URL`/`QDRANT_API_KEY` are ignored once `MEMORY_BACKEND=postgres`, so you can leave them in place during the cutover and remove them after.
+
+*e. Note the different failure mode.* On Qdrant a `VECTOR_DIM` mismatch silently wipes and recreates the collection. On Postgres the `vector(n)` column width is fixed at schema-creation time, so a mismatch throws a descriptive error and changes nothing - safer, but it means the `VECTOR_DIM` you migrate at is permanent for that database short of recreating the table.
+
+See [Migrating Qdrant data into Postgres](#migrating-qdrant-data-into-postgres) below for the script's dimension-handling details.
 
 ### Migrating Qdrant data into Postgres
 

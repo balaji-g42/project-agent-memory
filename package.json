@@ -1,6 +1,6 @@
 {
   "name": "project-agent-memory",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -39,7 +39,7 @@
     "@google/generative-ai": "^0.24.1",
     "@huggingface/transformers": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@qdrant/js-client-rest": "^1.15.1",
+    "@qdrant/js-client-rest": "^1.19.0",
     "axios": "^1.12.1",
     "dotenv": "^16.4.5",
     "openai": "^4.80.0",

@@ -312,23 +312,25 @@ class PrestVectorClient implements VectorClient {
         }));
     }
 
-    async search(
+    async query(
         name: string,
-        options: { vector: number[]; limit?: number; filter?: Filter; with_payload?: boolean; with_vector?: boolean }
-    ): Promise<Array<{ id: string; score: number; payload?: Record<string, any>; version: number }>> {
+        options: { query: number[]; limit?: number; filter?: Filter; with_payload?: boolean; with_vector?: boolean }
+    ): Promise<{ points: Array<{ id: string; score: number; payload?: Record<string, any>; version: number }> }> {
         await this.ensureSchema();
         const { score } = distance();
         const rows = await execRead("memory", "search_points", {
             collection: name,
             limit: options.limit ?? 10,
             filter_json: options.filter ? JSON.stringify(options.filter) : undefined
-        }, { "X-Vector": toVectorHeaderValue(options.vector) });
-        return rows.map((row: any) => ({
-            id: row.id,
-            version: 0,
-            score: score(Number(row.distance)),
-            ...(options.with_payload === false ? {} : { payload: row.payload })
-        }));
+        }, { "X-Vector": toVectorHeaderValue(options.query) });
+        return {
+            points: rows.map((row: any) => ({
+                id: row.id,
+                version: 0,
+                score: score(Number(row.distance)),
+                ...(options.with_payload === false ? {} : { payload: row.payload })
+            }))
+        };
     }
 
     async scroll(
