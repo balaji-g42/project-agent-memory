@@ -1,30 +1,36 @@
-/**
- * Comprehensive test suite for all 35 MCP tools
- * Tests memory operations, context management, decision logging, and more
- */
-
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-describe('Memory-Qdrant MCP Tools', () => {
+const PROJECT = 'memory-qdrant-mcp-test';
+
+function parse(res: any) {
+    const t = res.content?.[0]?.text ?? '';
+    try { return JSON.parse(t); } catch { return t; }
+}
+
+describe('Memory MCP v3 tool surface', () => {
     let client: Client;
     let transport: StdioClientTransport;
+    const state: Record<string, any> = {};
+
+    async function call(name: string, args: Record<string, any>) {
+        return parse(await client.callTool({ name, arguments: args }));
+    }
 
     beforeAll(async () => {
-        // Initialize MCP client connecting to our server
         transport = new StdioClientTransport({
             command: 'node',
             args: ['dist/index.js'],
+            env: {
+                ...(process.env as Record<string, string>),
+                VECTOR_DIM: '768',
+                EMBEDDING_PROVIDER: 'onnx',
+                EMBEDDING_MODEL: 'nomic-ai/nomic-embed-text-v1.5'
+            }
         });
 
-        client = new Client({
-            name: 'test-client',
-            version: '1.0.0',
-        }, {
-            capabilities: {}
-        });
-
+        client = new Client({ name: 'test-client', version: '1.0.0' }, { capabilities: {} });
         await client.connect(transport);
     });
 
@@ -32,510 +38,347 @@ describe('Memory-Qdrant MCP Tools', () => {
         await client.close();
     });
 
-    describe('Core Memory Operations', () => {
-        it('should log memory successfully', async () => {
-            const result = await client.callTool({
-                name: 'log_memory',
-                arguments: {
-                    type: 'productContext',
-                    content: 'Test product context for MCP project',
-                    project: 'test-project',
-                    topLevelId: 'test-001'
-                }
-            });
+    it('tools/list returns exactly the 7 v3 tools', async () => {
+        const { tools } = await client.listTools();
+        const names = tools.map(t => t.name).sort();
+        expect(names).toEqual([
+            'memory_admin', 'memory_context', 'memory_create',
+            'memory_delete', 'memory_graph', 'memory_read', 'memory_update'
+        ]);
+    });
 
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+    describe('memory_create', () => {
+        it('single entry returns id and type', async () => {
+            const r = await call('memory_create', {
+                project_name: PROJECT,
+                items: [{
+                    memory_type: 'decisionLog',
+                    content: 'Chose PostgreSQL with pgvector over Qdrant for the v3 storage backend',
+                    metadata: { status: 'accepted', priority: 'high' }
+                }]
+            });
+            expect(r).toHaveLength(1);
+            expect(typeof r[0].id).toBe('string');
+            expect(r[0].id.length).toBeGreaterThan(0);
+            expect(r[0].type).toBe('decisionLog');
+            state.decisionId = r[0].id;
         });
 
-        it('should query memory successfully', async () => {
-            const result = await client.callTool({
-                name: 'query_memory',
-                arguments: {
-                    query: 'product context',
-                    type: 'productContext',
-                    top_k: 3
-                }
+        it('batch of 3 returns 3 ids, order preserved', async () => {
+            const r = await call('memory_create', {
+                project_name: PROJECT,
+                items: [
+                    { memory_type: 'progress', content: 'Stood up the pgvector container and applied the memories schema', metadata: { status: 'done' } },
+                    { memory_type: 'systemPatterns', content: 'Selenium table assertions must wait on a row signature change, never a fixed sleep', metadata: { status: 'active' } },
+                    { memory_type: 'customData', content: 'Docker compose stacks live under the WSL home directory at ~/docker-compose', metadata: { status: 'active', dataType: 'infra' } }
+                ]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r).toHaveLength(3);
+            expect(r.map((x: any) => x.type)).toEqual(['progress', 'systemPatterns', 'customData']);
+            state.progressId = r[0].id;
+            state.patternId = r[1].id;
+            state.customId = r[2].id;
         });
 
-        it('should query memory with summarization', async () => {
-            const result = await client.callTool({
-                name: 'query_memory_summarized',
-                arguments: {
-                    query: 'product features',
-                    type: 'productContext',
-                    top_k: 5,
-                    summarize: true
-                }
+        it('explicit id is honoured and idempotent, update-by-external-id works', async () => {
+            const r = await call('memory_create', {
+                project_name: PROJECT,
+                items: [{ memory_type: 'progress', content: 'Explicit id entry, first write', id: 'fixed-id-001' }]
             });
+            const first = r[0].id;
+            expect(typeof first).toBe('string');
+            expect(first.length).toBeGreaterThan(0);
 
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            const again = await call('memory_create', {
+                project_name: PROJECT,
+                items: [{ memory_type: 'progress', content: 'Explicit id entry, second write', id: 'fixed-id-001' }]
+            });
+            expect(again[0].id).toBe(first);
+
+            const upd = await call('memory_update', {
+                project_name: PROJECT,
+                items: [{ id: 'fixed-id-001', content: 'Explicit id entry, updated by external id' }]
+            });
+            expect(upd[0]?.updated).toBe(true);
+            state.fixedId = first;
+        });
+
+        it('unknown memory_type is rejected', async () => {
+            let threw = false;
+            try {
+                const r = await call('memory_create', {
+                    project_name: PROJECT,
+                    items: [{ memory_type: 'notAType', content: 'should not be stored' }]
+                });
+                if (typeof r === 'string' && /invalid|error|expected/i.test(r)) threw = true;
+            } catch {
+                threw = true;
+            }
+            expect(threw).toBe(true);
         });
     });
 
-    describe('Decision Logging', () => {
-        it('should log decision successfully', async () => {
-            const result = await client.callTool({
-                name: 'log_decision',
-                arguments: {
-                    decision: 'Use TypeScript for type safety',
-                    reasoning: 'Better developer experience and fewer runtime errors',
-                    alternatives: 'JavaScript with JSDoc',
-                    impact: 'Medium',
-                    project: 'test-project'
-                }
+    describe('memory_read: search', () => {
+        it('relevant entry ranks first with a sane score', async () => {
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ query_text: 'which database did we pick for storage', limit: 3 }]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r.length).toBeGreaterThan(0);
+            expect(typeof r[0].score).toBe('number');
+            expect(r[0].score).toBeGreaterThan(0);
+            expect(r[0].score).toBeLessThanOrEqual(1);
+            expect(r[0].content).toMatch(/PostgreSQL/i);
         });
 
-        it('should get decisions', async () => {
-            const result = await client.callTool({
-                name: 'get_decisions',
-                arguments: {
-                    project: 'test-project',
-                    limit: 10
-                }
+        it('memory_type filter restricts results', async () => {
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ query_text: 'anything at all', memory_type: 'systemPatterns', limit: 5 }]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r.length).toBeGreaterThan(0);
+            expect(r.every((x: any) => x.type === 'systemPatterns')).toBe(true);
         });
 
-        it('should search decisions with full-text search', async () => {
-            const result = await client.callTool({
-                name: 'search_decisions_fts',
-                arguments: {
-                    searchText: 'TypeScript',
-                    project: 'test-project',
-                    limit: 5
-                }
+        it('limit is honoured', async () => {
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ query_text: 'database', limit: 2 }]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-    });
-
-    describe('Progress Tracking', () => {
-        it('should log progress successfully', async () => {
-            const result = await client.callTool({
-                name: 'log_progress',
-                arguments: {
-                    milestone: 'TypeScript Conversion Complete',
-                    details: 'All files converted from JavaScript to TypeScript',
-                    project: 'test-project'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r.length).toBeLessThanOrEqual(2);
         });
 
-        it('should get progress with status', async () => {
-            const result = await client.callTool({
-                name: 'get_progress_with_status',
-                arguments: {
-                    project: 'test-project',
-                    status: 'completed'
-                }
+        it('list mode (no query_text) returns rows in recency order', async () => {
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ memory_type: 'progress', limit: 10 }]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r.length).toBeGreaterThan(0);
+            expect(r.every((x: any) => x.type === 'progress')).toBe(true);
+            const ts = r.map((x: any) => new Date(x.timestamp).getTime());
+            expect(ts.every((v: number, i: number) => i === 0 || ts[i - 1] >= v)).toBe(true);
         });
 
-        it('should update progress status', async () => {
-            const result = await client.callTool({
-                name: 'update_progress_with_status',
-                arguments: {
-                    progressId: 'test-progress-001',
-                    status: 'in_progress',
-                    details: 'Updated progress details'
-                }
+        it('batch of 2 queries returns 2 result sets', async () => {
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [
+                    { query_text: 'database choice', limit: 2 },
+                    { memory_type: 'customData', limit: 2 }
+                ]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-
-        it('should search progress entries', async () => {
-            const result = await client.callTool({
-                name: 'search_progress_entries',
-                arguments: {
-                    searchText: 'conversion',
-                    project: 'test-project',
-                    status: 'completed'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r).toHaveLength(2);
+            expect(Array.isArray(r[0])).toBe(true);
+            expect(Array.isArray(r[1])).toBe(true);
         });
     });
 
-    describe('Context Management', () => {
-        it('should get product context', async () => {
-            const result = await client.callTool({
-                name: 'get_product_context',
-                arguments: {
-                    project: 'test-project'
-                }
+    describe('memory_read: metadata_filter', () => {
+        it('filters on a single value', async () => {
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ memory_type: 'decisionLog', metadata_filter: { status: 'accepted' }, limit: 10 }]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r.length).toBeGreaterThan(0);
+            expect(r.every((x: any) => x.metadata?.status === 'accepted')).toBe(true);
         });
 
-        it('should update product context', async () => {
-            const result = await client.callTool({
-                name: 'update_product_context',
-                arguments: {
-                    context: 'Updated product context with new features',
-                    project: 'test-project'
-                }
+        it('array value matches any element', async () => {
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ metadata_filter: { status: ['accepted', 'done'] }, limit: 10 }]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-
-        it('should get active context', async () => {
-            const result = await client.callTool({
-                name: 'get_active_context',
-                arguments: {
-                    project: 'test-project'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-
-        it('should update active context', async () => {
-            const result = await client.callTool({
-                name: 'update_active_context',
-                arguments: {
-                    context: 'Currently working on testing framework',
-                    project: 'test-project'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-
-        it('should get context history', async () => {
-            const result = await client.callTool({
-                name: 'get_context_history',
-                arguments: {
-                    project: 'test-project',
-                    limit: 10
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r.length).toBeGreaterThanOrEqual(2);
+            expect(r.every((x: any) => ['accepted', 'done'].includes(x.metadata?.status))).toBe(true);
         });
     });
 
-    describe('System Patterns', () => {
-        it('should get system patterns', async () => {
-            const result = await client.callTool({
-                name: 'get_system_patterns',
-                arguments: {
-                    project: 'test-project'
-                }
+    describe('memory_update', () => {
+        it('replaces content and re-embeds', async () => {
+            await call('memory_update', {
+                project_name: PROJECT,
+                items: [{ id: state.progressId, content: 'Ported the data layer and ran the full seven-tool suite against Qdrant' }]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ query_text: 'ran the seven tool suite', memory_type: 'progress', limit: 5 }]
+            });
+            const hit = r.find((x: any) => x.id === state.progressId);
+            expect(hit).toBeDefined();
+            expect(hit.content).toMatch(/seven-tool suite/);
         });
 
-        it('should update system patterns', async () => {
-            const result = await client.callTool({
-                name: 'update_system_patterns',
-                arguments: {
-                    patterns: 'Use async/await for all async operations',
-                    project: 'test-project'
-                }
+        it('shallow-merges metadata, preserves pre-existing keys', async () => {
+            await call('memory_update', {
+                project_name: PROJECT,
+                items: [{ id: state.customId, metadata: { priority: 'low' } }]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ memory_type: 'customData', limit: 10 }]
+            });
+            const hit = r.find((x: any) => x.id === state.customId);
+            expect(hit).toBeDefined();
+            expect(hit.metadata.priority).toBe('low');
+            expect(hit.metadata.dataType).toBe('infra');
+            expect(hit.metadata.status).toBe('active');
+            expect(hit.content).toMatch(/docker-compose/);
         });
 
-        it('should search system patterns', async () => {
-            const result = await client.callTool({
-                name: 'search_system_patterns',
-                arguments: {
-                    searchText: 'async',
-                    project: 'test-project',
-                    limit: 5
-                }
+        it('batch of 2', async () => {
+            const r = await call('memory_update', {
+                project_name: PROJECT,
+                items: [
+                    { id: state.patternId, metadata: { reviewed: true } },
+                    { id: 'fixed-id-001', metadata: { reviewed: true } }
+                ]
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-    });
-
-    describe('Knowledge Links', () => {
-        it('should create knowledge link', async () => {
-            const result = await client.callTool({
-                name: 'create_knowledge_link',
-                arguments: {
-                    sourceId: 'memory-001',
-                    targetId: 'memory-002',
-                    linkType: 'relates_to',
-                    description: 'Related memory entries'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-
-        it('should get knowledge links', async () => {
-            const result = await client.callTool({
-                name: 'get_knowledge_links',
-                arguments: {
-                    memoryId: 'memory-001',
-                    linkType: 'relates_to'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r).toHaveLength(2);
+            expect(r.every((x: any) => x.updated === true)).toBe(true);
         });
     });
 
-    describe('Semantic Search', () => {
-        it('should perform semantic search', async () => {
-            const result = await client.callTool({
-                name: 'semantic_search',
-                arguments: {
-                    query: 'typescript configuration',
-                    project: 'test-project',
-                    top_k: 5
-                }
-            });
+    describe('memory_context', () => {
+        it('returns productContext/activeContext/systemPatterns keys', async () => {
+            const r = await call('memory_context', { project_name: PROJECT });
+            expect(r).toHaveProperty('productContext');
+            expect(r).toHaveProperty('activeContext');
+            expect(Array.isArray(r.systemPatterns)).toBe(true);
+        });
 
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+        it('patch merges and is reflected in the same call', async () => {
+            const r = await call('memory_context', {
+                project_name: PROJECT,
+                product_context: { name: 'memory-qdrant-mcp', goal: 'move off Qdrant' },
+                active_context: { focus: 'testing the seven tools' }
+            });
+            expect(r.productContext.goal).toBe('move off Qdrant');
+            expect(r.activeContext.focus).toBe('testing the seven tools');
+        });
+
+        it('second patch merges shallowly, keeps earlier keys', async () => {
+            const r = await call('memory_context', {
+                project_name: PROJECT,
+                product_context: { stack: 'TypeScript' }
+            });
+            expect(r.productContext.stack).toBe('TypeScript');
+            expect(r.productContext.goal).toBe('move off Qdrant');
+        });
+
+        it('writes the previous version to contextHistory', async () => {
+            const r = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ memory_type: 'contextHistory', limit: 10 }]
+            });
+            expect(r.length).toBeGreaterThan(0);
         });
     });
 
-    describe('Text Summarization', () => {
-        it('should summarize text', async () => {
-            const result = await client.callTool({
-                name: 'summarize_text',
-                arguments: {
-                    text: 'This is a long text that needs to be summarized. It contains multiple sentences and paragraphs. The goal is to reduce its length while preserving key information.'
-                }
+    describe('memory_graph', () => {
+        it('link creates edges', async () => {
+            const r = await call('memory_graph', {
+                project_name: PROJECT,
+                op: 'link',
+                edges: [
+                    { from_id: state.decisionId, to_id: state.progressId, relation: 'implemented_by' },
+                    { from_id: state.progressId, to_id: state.patternId, relation: 'produced' }
+                ]
             });
+            const ids = Array.isArray(r) ? r : r?.ids ?? [];
+            expect(ids).toHaveLength(2);
+            state.linkIds = ids.map((x: any) => (typeof x === 'string' ? x : x.id));
+        });
 
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+        it('neighbors depth 1 reaches only direct edges', async () => {
+            const r = await call('memory_graph', { project_name: PROJECT, op: 'neighbors', id: state.decisionId, depth: 1 });
+            const ids = (r.neighbors ?? []).map((n: any) => n.id);
+            expect(ids).toContain(state.progressId);
+            expect(ids).not.toContain(state.patternId);
+        });
+
+        it('neighbors depth 2 reaches both connected nodes, no unconnected leak', async () => {
+            const r = await call('memory_graph', { project_name: PROJECT, op: 'neighbors', id: state.decisionId, depth: 2 });
+            const ids = (r.neighbors ?? []).map((n: any) => n.id);
+            expect(ids).toContain(state.progressId);
+            expect(ids).toContain(state.patternId);
+            expect(ids).not.toContain(state.customId);
+        });
+
+        it('direction=incoming restricts traversal', async () => {
+            const r = await call('memory_graph', { project_name: PROJECT, op: 'neighbors', id: state.decisionId, depth: 2, direction: 'incoming' });
+            const ids = (r.neighbors ?? []).map((n: any) => n.id);
+            expect(ids).not.toContain(state.progressId);
+        });
+
+        it('unlink removes the edge but not the nodes', async () => {
+            const r = await call('memory_graph', { project_name: PROJECT, op: 'unlink', link_ids: state.linkIds });
+            expect(r.deleted).toBeGreaterThanOrEqual(1);
+
+            const after = await call('memory_graph', { project_name: PROJECT, op: 'neighbors', id: state.decisionId, depth: 2 });
+            expect(after.neighbors ?? []).toHaveLength(0);
+
+            const node = await call('memory_read', { project_name: PROJECT, queries: [{ memory_type: 'decisionLog', limit: 10 }] });
+            expect(node.some((x: any) => x.id === state.decisionId)).toBe(true);
         });
     });
 
-    describe('Custom Data Operations', () => {
-        it('should store custom data', async () => {
-            const result = await client.callTool({
-                name: 'store_custom_data',
-                arguments: {
-                    key: 'test-config',
-                    value: { theme: 'dark', language: 'en' },
-                    tags: ['config', 'user-prefs'],
-                    project: 'test-project'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+    describe('memory_admin', () => {
+        it('export returns markdown', async () => {
+            const md = await call('memory_admin', { project_name: PROJECT, op: 'export' });
+            expect(typeof md).toBe('string');
+            expect(md.length).toBeGreaterThan(0);
+            expect(md).toMatch(/#/);
+            state.exported = md;
         });
 
-        it('should get custom data', async () => {
-            const result = await client.callTool({
-                name: 'get_custom_data',
-                arguments: {
-                    key: 'test-config',
-                    project: 'test-project'
-                }
-            });
+        it('export -> import -> export round-trips stably', async () => {
+            const imp = await call('memory_admin', { project_name: PROJECT, op: 'import', markdown: state.exported });
+            expect(imp).toBeInstanceOf(Object);
+            expect(imp.errors ?? []).toHaveLength(0);
+            expect(imp.imported).toBeGreaterThan(0);
 
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            const md2 = await call('memory_admin', { project_name: PROJECT, op: 'export' });
+            expect(typeof md2).toBe('string');
+            expect(md2.length).toBeGreaterThan(0);
+            for (const type of ['productcontext', 'decisionlog', 'progress']) {
+                expect(md2.toLowerCase()).toContain('## ' + type);
+            }
         });
 
-        it('should query custom data', async () => {
-            const result = await client.callTool({
-                name: 'query_custom_data',
-                arguments: {
-                    query: 'config',
-                    project: 'test-project',
-                    top_k: 5
-                }
+        it('import of foreign markdown reports errors, does not throw', async () => {
+            const r = await call('memory_admin', {
+                project_name: PROJECT, op: 'import',
+                markdown: '# Some unrelated document\n\n## Recipes\n\n### Pancakes\nFlour and eggs.\n'
             });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-
-        it('should search custom data', async () => {
-            const result = await client.callTool({
-                name: 'search_custom_data',
-                arguments: {
-                    searchText: 'theme',
-                    project: 'test-project',
-                    tags: ['config']
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-
-        it('should update custom data', async () => {
-            const result = await client.callTool({
-                name: 'update_custom_data',
-                arguments: {
-                    key: 'test-config',
-                    value: { theme: 'light', language: 'en' },
-                    project: 'test-project'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+            expect(r).toBeInstanceOf(Object);
+            expect(r.imported).toBe(0);
+            expect((r.errors ?? []).length).toBeGreaterThan(0);
         });
     });
 
-    describe('Batch Operations', () => {
-        it('should batch log memory', async () => {
-            const result = await client.callTool({
-                name: 'batch_log_memory',
-                arguments: {
-                    entries: [
-                        { type: 'productContext', content: 'Feature A', project: 'test-project' },
-                        { type: 'productContext', content: 'Feature B', project: 'test-project' }
-                    ]
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+    it('project isolation: a different project sees none of these rows', async () => {
+        const other = PROJECT + '-isolation';
+        await call('memory_create', {
+            project_name: other,
+            items: [{ memory_type: 'progress', content: 'Isolation probe row, belongs only to the isolation project' }]
         });
-
-        it('should batch query memory', async () => {
-            const result = await client.callTool({
-                name: 'batch_query_memory',
-                arguments: {
-                    queries: ['Feature A', 'Feature B'],
-                    type: 'productContext',
-                    top_k: 3
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+        const r = await call('memory_read', {
+            project_name: other, queries: [{ query_text: 'database choice PostgreSQL pgvector', limit: 10 }]
         });
-
-        it('should batch update context', async () => {
-            const result = await client.callTool({
-                name: 'batch_update_context',
-                arguments: {
-                    updates: {
-                        productContext: 'Updated product info',
-                        activeContext: 'Updated active info'
-                    },
-                    project: 'test-project'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
+        expect(r.some((x: any) => x.id === state.decisionId)).toBe(false);
     });
 
-    describe('Workspace Management', () => {
-        it('should initialize workspace', async () => {
-            const result = await client.callTool({
-                name: 'initialize_workspace',
-                arguments: {
-                    project: 'new-test-project',
-                    description: 'A new test project for initialization'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+    describe('memory_delete', () => {
+        it('unknown ids are ignored, not raised', async () => {
+            const r = await call('memory_delete', { project_name: PROJECT, ids: ['does-not-exist-xyz'] });
+            expect(typeof r.deleted).toBe('number');
         });
 
-        it('should sync memory', async () => {
-            const result = await client.callTool({
-                name: 'sync_memory',
-                arguments: {
-                    project: 'test-project',
-                    direction: 'push'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-    });
-
-    describe('Import/Export', () => {
-        it('should export memory to markdown', async () => {
-            const result = await client.callTool({
-                name: 'export_memory_to_markdown',
-                arguments: {
-                    project: 'test-project',
-                    outputPath: './test-export.md'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-
-        it('should import memory from markdown', async () => {
-            const result = await client.callTool({
-                name: 'import_memory_from_markdown',
-                arguments: {
-                    markdownPath: './test-export.md',
-                    project: 'test-project'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
-        });
-    });
-
-    describe('Conversation Analysis', () => {
-        it('should analyze conversation', async () => {
-            const result = await client.callTool({
-                name: 'analyze_conversation',
-                arguments: {
-                    messages: [
-                        { role: 'user', content: 'How do I configure TypeScript?' },
-                        { role: 'assistant', content: 'You need to create a tsconfig.json file' }
-                    ],
-                    project: 'test-project'
-                }
-            });
-
-            expect(result).toBeDefined();
-            expect(result.content).toBeDefined();
+        it('deleted entry is gone from subsequent reads', async () => {
+            const del = await call('memory_delete', { project_name: PROJECT, ids: ['fixed-id-001'] });
+            expect(del.deleted).toBe(1);
+            const r = await call('memory_read', { project_name: PROJECT, queries: [{ memory_type: 'progress', limit: 20 }] });
+            expect(r.some((x: any) => x.id === state.fixedId)).toBe(false);
         });
     });
 });

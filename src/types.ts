@@ -18,7 +18,10 @@ export interface Config {
     OPENAI_API_KEY: string;
     QDRANT_URL: string;
     QDRANT_API_KEY: string | null;
-    QDRANT_POOL_SIZE: number;
+    POOL_SIZE: number;
+    MEMORY_BACKEND: string;
+    POSTGRES_URL: string;
+    POSTGRES_PASSWORD: string | null;
     CACHE_TTL_SECONDS: number;
     EMBEDDING_CACHE_SIZE: number;
     QUERY_CACHE_SIZE: number;

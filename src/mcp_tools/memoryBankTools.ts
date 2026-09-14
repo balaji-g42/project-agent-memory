@@ -329,7 +329,7 @@ async function listMemory(projectName: string, memoryType: string | null = null,
             timestamp: point.payload?.timestamp,
             metadata: point.payload?.metadata ?? {}
         }))
-        .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+        .sort((a: QueryResult, b: QueryResult) => String(b.timestamp).localeCompare(String(a.timestamp)));
 }
 
 async function updateMemory(projectName: string, memoryId: string, content?: string, metadata?: Record<string, any>): Promise<boolean> {
@@ -377,7 +377,7 @@ async function deleteMemory(projectName: string, memoryIds: string[]): Promise<n
         return 0;
     }
 
-    await client.delete(collectionName, { wait: true, points: existing.map(point => point.id) });
+    await client.delete(collectionName, { wait: true, points: existing.map((point: { id: string | number }) => point.id) });
     cacheUtils.invalidateProjectCache(projectName);
     return existing.length;
 }
@@ -725,7 +725,7 @@ async function getNeighbors(projectName: string, entityId: string, linkType: str
         via: reached.get(String(point.id))!.via,
         content: point.payload?.content,
         type: point.payload?.type
-    })).sort((a, b) => a.depth - b.depth);
+    })).sort((a: { depth: number }, b: { depth: number }) => a.depth - b.depth);
 }
 
 async function deleteKnowledgeLinks(projectName: string, linkIds: string[]): Promise<number> {

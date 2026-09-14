@@ -8,9 +8,16 @@ Runs via `npx` - no global install, no long-running service:
 npx -y memory-qdrant-mcp
 ```
 
-You need a reachable Qdrant. Everything else has a working default.
+You need a reachable Qdrant or Postgres. Everything else has a working default.
 
 ## Environment variables
+
+### Storage backend
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_BACKEND` | `qdrant` | `qdrant` or `postgres` |
+| `POOL_SIZE` | `10` | Client pool size, applies to the selected backend |
 
 ### Qdrant
 
@@ -18,7 +25,15 @@ You need a reachable Qdrant. Everything else has a working default.
 |----------|---------|-------------|
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
 | `QDRANT_API_KEY` | unset | Required by Qdrant Cloud, ignored locally |
-| `QDRANT_POOL_SIZE` | `10` | Client pool size |
+
+### Postgres / pgvector
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_URL` | `postgresql://postgres@localhost:5432/memory` | Connection URL |
+| `POSTGRES_PASSWORD` | unset | Used when the URL carries no password |
+
+Requires the `vector` extension. Tables `memory_collections` and `memory_points` are created on first use.
 
 ### Vectors
 

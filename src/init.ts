@@ -2,6 +2,7 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { v4 as uuidv4 } from "uuid";
 import config from "./config.js";
+import { PostgresVectorClient } from "./backends/postgres.js";
 import type { MemoryType } from "./types.js";
 
 const MEMORY_TYPES: MemoryType[] = [
@@ -21,13 +22,15 @@ const DISTANCE_MAP: Record<string, string> = {
     Dot: "Dot",
 };
 
-const client = new QdrantClient({
-    url: config.QDRANT_URL,
-    port: 443,
-    apiKey: process.env.QDRANT_API_KEY || undefined,
-    // @ts-ignore - checkCompatibility may not be in the types but is valid
-    checkCompatibility: false
-});
+const client: any = config.MEMORY_BACKEND === "postgres"
+    ? new PostgresVectorClient()
+    : new QdrantClient({
+        url: config.QDRANT_URL,
+        port: 443,
+        apiKey: config.QDRANT_API_KEY || undefined,
+        // @ts-ignore - checkCompatibility may not be in the types but is valid
+        checkCompatibility: false
+    });
 
 function readVectorSize(params: unknown): number | undefined {
     const vectors = (params as { vectors?: unknown })?.vectors;
@@ -41,7 +44,7 @@ async function initMemoryBank(projectName: string): Promise<string> {
 
     // Check if collection exists
     const existingCollections = await client.getCollections();
-    let exists = existingCollections.collections.some(c => c.name === collectionName);
+    let exists = existingCollections.collections.some((c: { name: string }) => c.name === collectionName);
 
     if (exists) {
         const info = await client.getCollection(collectionName);

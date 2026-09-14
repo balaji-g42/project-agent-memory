@@ -1,6 +1,6 @@
 # Memory Qdrant MCP Agent Skill
 
-A Claude Agent Skill for persistent project memory backed by Qdrant. It lets Claude carry context, decisions, progress and patterns across conversations.
+A Claude Agent Skill for persistent project memory backed by Qdrant or PostgreSQL/pgvector (`MEMORY_BACKEND`, one env var). It lets Claude carry context, decisions, progress and patterns across conversations.
 
 ## What is an Agent Skill?
 
@@ -12,11 +12,12 @@ Learn more: [Agent Skills Documentation](https://docs.anthropic.com/en/docs/agen
 
 ```
 skill/
-├── SKILL.md              # Main skill (YAML frontmatter + instructions)
-├── API-REFERENCE.md      # Tool reference (7 tools)
-├── MCP-CONFIG.md         # Configuration guide
-├── README.md             # This file
-└── *.example.json        # MCP server config templates
+├── SKILL.md                          # Main skill (YAML frontmatter + instructions)
+├── API-REFERENCE.md                  # Tool reference (7 tools)
+├── MCP-CONFIG.md                     # Configuration guide
+├── README.md                         # This file
+├── migrate-qdrant-to-pgvector.mjs    # One-time Qdrant -> Postgres data copy
+└── *.example.json                    # MCP server config templates
 ```
 
 **Progressive Loading:**
@@ -70,7 +71,7 @@ The skill is the instructions; the tools come from the MCP server, configured se
 - `vscode-mcp-config.example.json` - VS Code
 - `cursor-config.example.json` - Cursor
 
-Minimum config - the server runs via `npx`, embeds locally with ONNX, and needs only a reachable Qdrant:
+Minimum config - the server runs via `npx`, embeds locally with ONNX, and needs a reachable Qdrant (default) or Postgres (`MEMORY_BACKEND=postgres`):
 
 ```json
 {
@@ -84,7 +85,24 @@ Minimum config - the server runs via `npx`, embeds locally with ONNX, and needs 
 }
 ```
 
-**See [MCP-CONFIG.md](MCP-CONFIG.md) for the full environment-variable reference.**
+**See [MCP-CONFIG.md](MCP-CONFIG.md) for the full environment-variable reference**, including the Postgres settings.
+
+### Migrating existing Qdrant data into Postgres
+
+`migrate-qdrant-to-pgvector.mjs` in this directory is a one-time, one-way copy for switching an existing Qdrant deployment to `MEMORY_BACKEND=postgres` without losing history. It handles source vectors of any dimension - truncating and re-normalizing when wider than the target `VECTOR_DIM`, refusing rather than padding when narrower. Pass `--project <name>` for one collection or `--all` for every `memory_bank_*` collection on the server (non-`memory_bank_` collections, e.g. from an unrelated app sharing the same Qdrant instance, are left alone); in `--all` mode a collection narrower than `--vector-dim` is skipped and reported rather than aborting the run.
+
+```bash
+node skill/migrate-qdrant-to-pgvector.mjs --project my-app \
+  --qdrant-url http://localhost:6333 \
+  --postgres-url postgresql://postgres@localhost:5432/memory
+
+node skill/migrate-qdrant-to-pgvector.mjs --all \
+  --qdrant-url https://your-qdrant-host \
+  --qdrant-api-key "$QDRANT_API_KEY" \
+  --postgres-url postgresql://postgres@localhost:5432/memory
+```
+
+`--help` lists every flag, including `--dry-run`. For an HTTPS Qdrant URL with no explicit port, the script talks to 443; the underlying client otherwise defaults to Qdrant's local dev port 6333.
 
 ## Tools
 
@@ -165,13 +183,13 @@ Opens http://localhost:6274 for interactive tool testing.
 
 ### MCP server connection errors
 
-Verify the server entry in the client config, check `QDRANT_URL` / `QDRANT_API_KEY`, and test with MCP Inspector. See [MCP-CONFIG.md](MCP-CONFIG.md).
+Verify the server entry in the client config, check `MEMORY_BACKEND` and the matching `QDRANT_URL`/`QDRANT_API_KEY` or `POSTGRES_URL`/`POSTGRES_PASSWORD`, and test with MCP Inspector. See [MCP-CONFIG.md](MCP-CONFIG.md).
 
 ### Memory not found
 
 - `project_name` must match exactly (case-sensitive).
-- Check the `memory_bank_<project_name>` collection exists in Qdrant.
-- If `VECTOR_DIM` changed, the collection was recreated empty and the old entries are gone - see the warning in MCP-CONFIG.md.
+- Check the `memory_bank_<project_name>` collection exists (Qdrant) or the matching rows exist in `memory_collections`/`memory_points` (Postgres).
+- On Qdrant, if `VECTOR_DIM` changed, the collection was recreated empty and the old entries are gone - see the warning in MCP-CONFIG.md. On Postgres a `VECTOR_DIM` mismatch throws instead and changes nothing.
 
 ## Security
 
@@ -187,7 +205,7 @@ Verify the server entry in the client config, check `QDRANT_URL` / `QDRANT_API_K
 - Use environment variables
 - Rotate keys regularly
 
-With the default `onnx` provider no API key is needed at all - embeddings run in-process and nothing leaves the machine except the Qdrant writes.
+With the default `onnx` provider no API key is needed at all - embeddings run in-process and nothing leaves the machine except the backend writes.
 
 ## Documentation
 
@@ -201,6 +219,7 @@ With the default `onnx` provider no API key is needed at all - embeddings run in
 - **Agent Skills Docs**: https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills
 - **MCP Protocol**: https://modelcontextprotocol.io/
 - **Qdrant**: https://qdrant.tech/
+- **pgvector**: https://github.com/pgvector/pgvector
 
 ## License
 

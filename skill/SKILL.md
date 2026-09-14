@@ -1,6 +1,6 @@
 ---
 name: memory-qdrant-mcp
-description: Persistent project memory backed by a Qdrant vector database. Use this when you need to store or recall context, decisions, progress, or patterns across conversations. Provides 7 tools - memory_create, memory_read, memory_update, memory_delete, memory_context, memory_graph, memory_admin. Use when the user asks to remember something, recall past decisions, track progress, link related memories, or search project history.
+description: Persistent project memory backed by Qdrant or PostgreSQL/pgvector, selected with one environment variable. Use this when you need to store or recall context, decisions, progress, or patterns across conversations. Provides 7 tools - memory_create, memory_read, memory_update, memory_delete, memory_context, memory_graph, memory_admin. Use when the user asks to remember something, recall past decisions, track progress, link related memories, or search project history.
 ---
 
 # Memory Qdrant MCP
@@ -145,9 +145,11 @@ Keep writes small - one idea per entry. A progress entry is at most five lines: 
 
 ## Configuration
 
-Embeddings run in-process on ONNX by default - no external embedding service needed. See `MCP-CONFIG.md` for the environment variables, including `VECTOR_DIM` (default 768), `EMBEDDING_PROVIDER`, and how to point the OpenAI-compatible provider at Ollama, LM Studio or vLLM.
+Embeddings run in-process on ONNX by default - no external embedding service needed. See `MCP-CONFIG.md` for the environment variables, including `MEMORY_BACKEND` (`qdrant` default, or `postgres`), `VECTOR_DIM` (default 768), `EMBEDDING_PROVIDER`, and how to point the OpenAI-compatible provider at Ollama, LM Studio or vLLM.
 
-Changing `VECTOR_DIM` against an existing collection recreates that collection and destroys its stored memories. The server warns on stderr when it does this.
+Changing `VECTOR_DIM` against an existing Qdrant collection recreates that collection and destroys its stored memories; the server warns on stderr when it does this. On Postgres the vector column width is fixed at schema creation, so a mismatch instead throws and changes nothing.
+
+Have existing data in Qdrant and want to move it into Postgres once? Run `migrate-qdrant-to-pgvector.mjs` in this directory - a one-time, one-way copy that handles source vectors of any dimension (truncate + re-normalize if wider than the target `VECTOR_DIM`, refuse rather than pad if narrower). `--project <name>` migrates one collection, `--all` migrates every `memory_bank_*` collection on the server (skipping, not aborting on, any that are narrower than the target). `node skill/migrate-qdrant-to-pgvector.mjs --help` for flags.
 
 ## Migrating from v2.x
 

@@ -35,8 +35,11 @@ const config: Config = {
     OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
     QDRANT_URL: process.env.QDRANT_URL || "http://localhost:6333",
     QDRANT_API_KEY: process.env.QDRANT_API_KEY || null,
+    MEMORY_BACKEND: (process.env.MEMORY_BACKEND || "qdrant").toLowerCase(),
+    POSTGRES_URL: process.env.POSTGRES_URL || "postgresql://postgres@localhost:5432/memory",
+    POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD || null,
     // Performance optimization settings
-    QDRANT_POOL_SIZE: parseInt(process.env.QDRANT_POOL_SIZE || "10"),
+    POOL_SIZE: parseInt(process.env.POOL_SIZE || process.env.QDRANT_POOL_SIZE || "10"),
     CACHE_TTL_SECONDS: parseInt(process.env.CACHE_TTL_SECONDS || "300"), // 5 minutes default
     EMBEDDING_CACHE_SIZE: parseInt(process.env.EMBEDDING_CACHE_SIZE || "1000"),
     QUERY_CACHE_SIZE: parseInt(process.env.QUERY_CACHE_SIZE || "500")

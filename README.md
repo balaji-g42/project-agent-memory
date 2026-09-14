@@ -1,21 +1,22 @@
 # Memory Qdrant MCP
 
-A TypeScript MCP (Model Context Protocol) server that gives a coding agent persistent project memory - context, decisions, progress and patterns - backed by a Qdrant vector database.
+A TypeScript MCP (Model Context Protocol) server that gives a coding agent persistent project memory - context, decisions, progress and patterns - backed by Qdrant or PostgreSQL/pgvector, selected with one environment variable.
 
 ## Features
 
 - **7 MCP tools**: `memory_create`, `memory_read`, `memory_update`, `memory_delete`, `memory_context`, `memory_graph`, `memory_admin`
-- **Local embeddings by default**: ONNX CPU inference in-process via `@huggingface/transformers`; no embedding service, no API key, nothing leaves the machine except the Qdrant writes
+- **Dual storage backend**: `MEMORY_BACKEND=qdrant` (default) or `MEMORY_BACKEND=postgres`, same tool surface either way - no code change to switch, and Qdrant deployments need no env changes to keep working
+- **Local embeddings by default**: ONNX CPU inference in-process via `@huggingface/transformers`; no embedding service, no API key, nothing leaves the machine except the backend writes
 - **Configurable vector dimension**: `VECTOR_DIM` (default 768), Matryoshka-truncated and re-normalized
 - **Pluggable providers**: `onnx`, `openai` (any OpenAI-compatible endpoint - Ollama, LM Studio, vLLM, LiteLLM, OpenAI itself), `gemini`, `openrouter`
 - **No silent fallbacks**: a failing provider fails the call rather than returning degraded vectors
 - **Runs via `npx`**: no global install, no long-running service
-- **Performance**: Qdrant connection pooling, LRU caches for embeddings and queries, cache invalidation on write
+- **Performance**: connection pooling (`POOL_SIZE`, shared across backends), LRU caches for embeddings and queries, cache invalidation on write
 
 ## Requirements
 
 - Node.js 18+
-- A reachable Qdrant instance (local or cloud)
+- A reachable Qdrant instance, **or** a PostgreSQL instance with the `vector` (pgvector) extension available
 - No API key with the default `onnx` provider
 
 ## Installation
@@ -38,11 +39,37 @@ node dist/index.js
 
 ## Setup
 
-### 1. Qdrant
+### 1. Storage backend
+
+Pick one. `MEMORY_BACKEND` defaults to `qdrant`, so existing deployments need no changes.
+
+#### Qdrant (default)
 
 ```bash
 docker run -p 6333:6333 -v ./qdrant_storage:/qdrant/storage qdrant/qdrant
 ```
+
+```env
+MEMORY_BACKEND=qdrant
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=
+```
+
+#### PostgreSQL / pgvector
+
+Any Postgres with the `vector` extension available. Example, local Docker:
+
+```bash
+docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres -v ./pg_data:/var/lib/postgresql/data pgvector/pgvector:pg17
+```
+
+```env
+MEMORY_BACKEND=postgres
+POSTGRES_URL=postgresql://postgres@localhost:5432/memory
+POSTGRES_PASSWORD=postgres
+```
+
+The `vector` extension and both tables (`memory_collections`, `memory_points`) are created automatically on first connect - no manual migration step. See [`instructions/migration_plan.md/plan.md`](instructions/migration_plan.md/plan.md) §4 for the schema and design notes. If you have existing data in Qdrant and want to move it into Postgres, see [Migrating Qdrant data into Postgres](#migrating-qdrant-data-into-postgres) below.
 
 ### 2. Configuration
 
@@ -55,6 +82,9 @@ QDRANT_URL=http://localhost:6333
 Common settings:
 
 ```env
+MEMORY_BACKEND=qdrant
+POOL_SIZE=10
+
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=
 
@@ -70,9 +100,9 @@ SUMMARIZER_MODEL=openai/gpt-oss-20b:free
 OPENROUTER_API_KEY=
 ```
 
-The full environment-variable reference is in [`skill/MCP-CONFIG.md`](skill/MCP-CONFIG.md).
+The full environment-variable reference, including the Postgres table, is in [`skill/MCP-CONFIG.md`](skill/MCP-CONFIG.md).
 
-**Changing `VECTOR_DIM` destroys data.** On the next call the server sees the size mismatch against the stored collection, warns on stderr, deletes that collection and recreates it empty.
+**Changing `VECTOR_DIM` destroys data on Qdrant.** On the next call the server sees the size mismatch against the stored collection, warns on stderr, deletes that collection and recreates it empty. On Postgres the vector column width is fixed at schema-creation time; a mismatch instead throws a descriptive error and changes nothing.
 
 ### Embedding providers
 
@@ -156,6 +186,18 @@ Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-RE
 
 v3.0 condenses the 35 v2 tools into these 7; the per-tool mapping is in [`skill/SKILL.md`](skill/SKILL.md).
 
+### Migrating Qdrant data into Postgres
+
+`skill/migrate-qdrant-to-pgvector.mjs` is a one-time, one-way copy of every point in a Qdrant collection into the Postgres backend's schema. It's only needed if you have existing Qdrant data and want to start using `MEMORY_BACKEND=postgres` with it - the two backends are otherwise independent and nothing else moves data between them.
+
+```bash
+node skill/migrate-qdrant-to-pgvector.mjs --project memory-qdrant-mcp \
+  --qdrant-url http://localhost:6333 \
+  --postgres-url postgresql://postgres@localhost:5432/memory
+```
+
+Source vectors of any dimension are supported: if the Qdrant collection's vector size differs from the target `VECTOR_DIM`, the script truncates and re-normalizes (Matryoshka-style, same as the embedding layer) when the source is larger, and refuses with a clear error rather than padding when the source is smaller. Run with `--help` for the full flag list, including `--dry-run`.
+
 ## Testing
 
 Interactive:
@@ -196,12 +238,14 @@ memory-qdrant-mcp/
 │   │   ├── openaiCompatible.ts
 │   │   ├── geminiVertex.ts
 │   │   └── openrouter.ts
+│   ├── backends/
+│   │   └── postgres.ts       # Qdrant-API-shaped shim over pg + pgvector
 │   └── mcp_tools/
 │       ├── memoryBankTools.ts
 │       └── summarizer.ts
 ├── dist/                     # Compiled output (generated)
 ├── tests/
-├── skill/                    # Claude Agent Skill
+├── skill/                    # Claude Agent Skill, incl. the Qdrant->Postgres migration script
 ├── package.json
 └── tsconfig.json
 ```
@@ -221,5 +265,6 @@ MIT
 
 - [Model Context Protocol](https://modelcontextprotocol.io)
 - [Qdrant](https://qdrant.tech)
+- [pgvector](https://github.com/pgvector/pgvector)
 - [Transformers.js](https://huggingface.co/docs/transformers.js)
 - [OpenRouter](https://openrouter.ai)
