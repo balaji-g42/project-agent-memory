@@ -1,0 +1,46 @@
+{
+  "name": "project-agent-memory",
+  "displayName": "Project Agent Memory",
+  "description": "Persistent, semantically searchable agent memory backed by Qdrant or PostgreSQL/pgvector, with memory-first session hooks and a mandatory commit-logging Stop hook.",
+  "version": "3.0.0",
+  "author": { "name": "Balaji.G" },
+  "homepage": "https://github.com/balaji-g42/memory-qdrant-mcp",
+  "repository": "https://github.com/balaji-g42/memory-qdrant-mcp",
+  "license": "MIT",
+  "keywords": ["memory", "mcp", "qdrant", "pgvector", "context"],
+  "skills": "./skill/",
+  "userConfig": {
+    "memory_backend": {
+      "type": "string",
+      "title": "Memory backend",
+      "description": "qdrant or postgres",
+      "default": "qdrant"
+    },
+    "qdrant_url": {
+      "type": "string",
+      "title": "Qdrant URL",
+      "description": "Used when memory_backend is qdrant",
+      "default": "http://localhost:6333"
+    },
+    "qdrant_api_key": {
+      "type": "string",
+      "title": "Qdrant API key",
+      "description": "Only required for Qdrant Cloud",
+      "required": false,
+      "sensitive": true
+    },
+    "postgres_url": {
+      "type": "string",
+      "title": "PostgreSQL URL",
+      "description": "Used when memory_backend is postgres",
+      "default": "postgresql://postgres@localhost:5432/memory"
+    },
+    "postgres_password": {
+      "type": "string",
+      "title": "PostgreSQL password",
+      "description": "Only if not embedded in postgres_url",
+      "required": false,
+      "sensitive": true
+    }
+  }
+}
