@@ -1,5 +1,5 @@
 import { initMemoryBank, client } from "../init.js";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { embeddingCache, queryCache, contextCache, patternCache, cacheKeys, cacheUtils } from "../cache.js";
 import type { 
     MemoryType, 
@@ -234,7 +234,7 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
     const vectors = await getCachedEmbeddings([content]);
     const vector = vectors[0];
 
-    const pointId = topLevelId || uuidv4();
+    const pointId = topLevelId ? toPointId(topLevelId) : uuidv4();
 
     const point = {
         id: pointId,
@@ -248,7 +248,7 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
 
     // Invalidate relevant caches
     cacheUtils.invalidateProjectCache(projectName);
@@ -335,7 +335,8 @@ async function listMemory(projectName: string, memoryType: string | null = null,
 async function updateMemory(projectName: string, memoryId: string, content?: string, metadata?: Record<string, any>): Promise<boolean> {
     const collectionName = await initMemoryBank(projectName);
 
-    const existing = await client.retrieve(collectionName, { ids: [memoryId], with_payload: true, with_vector: true });
+    const pointId = toPointId(memoryId);
+    const existing = await client.retrieve(collectionName, { ids: [pointId], with_payload: true, with_vector: true });
     if (existing.length === 0) {
         throw new Error(`Memory ${memoryId} not found in project ${projectName}`);
     }
@@ -351,8 +352,9 @@ async function updateMemory(projectName: string, memoryId: string, content?: str
         : previous.payload?.metadata ?? {};
 
     await client.upsert(collectionName, {
+        wait: true,
         points: [{
-            id: memoryId,
+            id: pointId,
             vector,
             payload: {
                 ...previous.payload,
@@ -370,17 +372,32 @@ async function updateMemory(projectName: string, memoryId: string, content?: str
 async function deleteMemory(projectName: string, memoryIds: string[]): Promise<number> {
     const collectionName = await initMemoryBank(projectName);
 
-    const existing = await client.retrieve(collectionName, { ids: memoryIds, with_payload: false });
+    const existing = await client.retrieve(collectionName, { ids: memoryIds.map(toPointId), with_payload: false });
     if (existing.length === 0) {
         return 0;
     }
 
-    await client.delete(collectionName, { points: existing.map(point => point.id) });
+    await client.delete(collectionName, { wait: true, points: existing.map(point => point.id) });
     cacheUtils.invalidateProjectCache(projectName);
     return existing.length;
 }
 
 // ----- Log structured memory entry (for ConPort contexts) -----
+const STRUCTURED_CONTEXT_NAMESPACE = "6f9b6c1e-4c4e-5a2f-9a7c-0d1f2e3a4b5c";
+const EXTERNAL_ID_NAMESPACE = "1b4d7c8a-9e2f-5b3c-8d6a-7f0e1c2b3a4d";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function toPointId(externalId: string): string {
+    if (UUID_RE.test(externalId)) return externalId;
+    if (/^\d+$/.test(externalId)) return externalId;
+    return uuidv5(externalId, EXTERNAL_ID_NAMESPACE);
+}
+
+function structuredContextId(projectName: string, contextType: string): string {
+    return uuidv5(`${projectName}:${contextType}`, STRUCTURED_CONTEXT_NAMESPACE);
+}
+
 async function logStructuredMemory(projectName: string, contextType: "productContext" | "activeContext", content: string | Record<string, any>, topLevelId: string | null = null): Promise<string> {
     if (!STRUCTURED_CONTEXT_TYPES.includes(contextType)) {
         throw new Error(`Invalid structured context type: ${contextType}`);
@@ -392,7 +409,7 @@ async function logStructuredMemory(projectName: string, contextType: "productCon
     const contentString = typeof content === 'string' ? content : JSON.stringify(content);
     const vector = (await getEmbeddingProvider().embedTexts([contentString]))[0];
 
-    const pointId = topLevelId || uuidv4();
+    const pointId = topLevelId || structuredContextId(projectName, contextType);
 
     const point = {
         id: pointId,
@@ -406,7 +423,8 @@ async function logStructuredMemory(projectName: string, contextType: "productCon
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
+    contextCache.getCache().delete(cacheKeys.structuredContext(projectName, contextType));
     return pointId;
 }
 
@@ -426,19 +444,27 @@ async function getStructuredContext(projectName: string, contextType: "productCo
     const collectionName = `memory_bank_${projectName}`;
 
     // Get the most recent entry for this context type
-    const results = await client.search(collectionName, {
-        vector: (await getCachedEmbeddings([`context type: ${contextType}`]))[0], // meaningful vector for context type
-        limit: 1,
-        filter: {
-            must: [
-                { key: "project", match: { value: projectName } },
-                { key: "type", match: { value: contextType } },
-                { key: "structured", match: { value: true } }
-            ]
-        },
+    let results: Array<{ payload?: Record<string, any> | null }> = await client.retrieve(collectionName, {
+        ids: [structuredContextId(projectName, contextType)],
         with_payload: true,
         with_vector: false
     });
+
+    if (results.length === 0) {
+        results = await client.search(collectionName, {
+            vector: (await getCachedEmbeddings([`context type: ${contextType}`]))[0],
+            limit: 1,
+            filter: {
+                must: [
+                    { key: "project", match: { value: projectName } },
+                    { key: "type", match: { value: contextType } },
+                    { key: "structured", match: { value: true } }
+                ]
+            },
+            with_payload: true,
+            with_vector: false
+        });
+    }
 
     let contextResult: Record<string, any>;
     if (results.length === 0) {
@@ -599,8 +625,8 @@ async function createKnowledgeLink(projectName: string, edges: GraphEdgeInput[])
             type: "knowledgeLink",
             content: contents[i],
             metadata: {
-                sourceId: edge.from_id,
-                targetId: edge.to_id,
+                sourceId: toPointId(edge.from_id),
+                targetId: toPointId(edge.to_id),
                 linkType: edge.relation
             },
             timestamp,
@@ -608,7 +634,7 @@ async function createKnowledgeLink(projectName: string, edges: GraphEdgeInput[])
         }
     }));
 
-    await client.upsert(collectionName, { points });
+    await client.upsert(collectionName, { wait: true, points });
     cacheUtils.invalidateProjectCache(projectName);
 
     return points.map(point => ({
@@ -649,18 +675,20 @@ async function getAllKnowledgeLinks(projectName: string, linkType: string | null
 
 async function getKnowledgeLinks(projectName: string, entityId: string, linkType: string | null = null, direction: LinkDirection = "both"): Promise<KnowledgeLink[]> {
     const links = await getAllKnowledgeLinks(projectName, linkType);
+    const nodeId = toPointId(entityId);
     return links.filter(link =>
-        (direction !== "incoming" && link.sourceId === entityId) ||
-        (direction !== "outgoing" && link.targetId === entityId)
+        (direction !== "incoming" && link.sourceId === nodeId) ||
+        (direction !== "outgoing" && link.targetId === nodeId)
     );
 }
 
 async function getNeighbors(projectName: string, entityId: string, linkType: string | null = null, depth: number = 1, direction: LinkDirection = "both"): Promise<NeighborResult[]> {
     const links = await getAllKnowledgeLinks(projectName, linkType);
 
+    const nodeId = toPointId(entityId);
     const reached = new Map<string, { depth: number; via: string }>();
-    let frontier = [entityId];
-    const seen = new Set<string>([entityId]);
+    let frontier = [nodeId];
+    const seen = new Set<string>([nodeId]);
 
     for (let level = 1; level <= depth && frontier.length > 0; level++) {
         const next: string[] = [];
@@ -773,7 +801,7 @@ async function batchLogMemory(projectName: string, entries: BatchLogEntry[]): Pr
 
     // Create points
     entries.forEach((entry, index) => {
-        const pointId = entry.topLevelId || uuidv4();
+        const pointId = entry.topLevelId ? toPointId(entry.topLevelId) : uuidv4();
         const point = {
             id: pointId,
             vector: vectors[index][0],
@@ -787,7 +815,7 @@ async function batchLogMemory(projectName: string, entries: BatchLogEntry[]): Pr
         points.push(point);
     });
 
-    await client.upsert(collectionName, { points });
+    await client.upsert(collectionName, { wait: true, points });
     return points.map(point => point.id);
 }
 
@@ -935,7 +963,7 @@ async function updateSystemPatterns(projectName: string, patterns: string[]): Pr
             }
         };
 
-        await client.upsert(collectionName, { points: [point] });
+        await client.upsert(collectionName, { wait: true, points: [point] });
         ids.push(pointId);
     }
 
@@ -1043,7 +1071,7 @@ async function updateProgressWithStatus(projectName: string, content: string, st
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
     return pointId;
 }
 
@@ -1117,7 +1145,7 @@ async function storeCustomData(projectName: string, data: any, dataType: string,
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
     return pointId;
 }
 
@@ -1277,7 +1305,7 @@ async function updateCustomData(projectName: string, dataId: string, newData: an
         }
     };
 
-    await client.upsert(collectionName, { points: [point] });
+    await client.upsert(collectionName, { wait: true, points: [point] });
     return true;
 }
 
@@ -1317,7 +1345,7 @@ async function initializeWorkspace(projectName: string, workspaceInfo: Workspace
             }
         };
 
-        await client.upsert(collectionName, { points: [point] });
+        await client.upsert(collectionName, { wait: true, points: [point] });
 
         // Initialize basic memory contexts if they don't exist
         await initializeBasicContexts(projectName);
@@ -1583,23 +1611,37 @@ async function importMemoryFromMarkdown(projectName: string, markdownContent: st
         timestamp: new Date().toISOString()
     };
 
+    let parsedData: { sections: Record<string, Array<{ heading: string; content: string }>> };
     try {
-        const parsedData = parseMarkdownToMemory(markdownContent);
+        parsedData = parseMarkdownToMemory(markdownContent);
+    } catch (error) {
+        importResults.errors.push((error as Error).message);
+        return importResults;
+    }
 
-        for (const [type, entries] of Object.entries(parsedData.sections)) {
+    for (const [type, entries] of Object.entries(parsedData.sections)) {
+        if (!ALL_MEMORY_TYPES.includes(type as MemoryType)) {
+            importResults.errors.push(`Unknown section, skipped: ${type}`);
+            continue;
+        }
+
+        try {
             if (STRUCTURED_CONTEXT_TYPES.includes(type as any)) {
-                await logStructuredMemory(projectName, type as "productContext" | "activeContext", entries);
+                const context = entriesToStructuredObject(entries);
+                if (Object.keys(context).length === 0) continue;
+                await updateStructuredContext(projectName, type as "productContext" | "activeContext", context);
                 importResults.imported++;
             } else {
-                // Import as regular memory entries
-                for (const entry of entries as any[]) {
-                    await logMemory(projectName, type as MemoryType, entry.content);
+                for (const entry of entries) {
+                    const content = entry.content.replace(/\n?\*[^*\n]*\*$/, '').trim();
+                    if (!content) continue;
+                    await logMemory(projectName, type as MemoryType, content);
                     importResults.imported++;
                 }
             }
+        } catch (error) {
+            importResults.errors.push(`${type}: ${(error as Error).message}`);
         }
-    } catch (error) {
-        importResults.errors.push((error as Error).message);
     }
 
     return importResults;
@@ -1647,30 +1689,57 @@ function convertToMarkdown(exportData: ExportData): string {
  * @param markdown - Markdown content
  * @returns Parsed memory data
  */
-function parseMarkdownToMemory(markdown: string): { sections: Record<string, any> } {
-    // Simple markdown parser - would need more sophisticated parsing for complex structures
-    const sections: Record<string, any> = {};
+const ALL_MEMORY_TYPES: MemoryType[] = [
+    "productContext",
+    "activeContext",
+    "systemPatterns",
+    "decisionLog",
+    "progress",
+    "contextHistory",
+    "customData"
+];
+
+function canonicalMemoryType(heading: string): MemoryType | null {
+    const normalized = heading.trim().toLowerCase().replace(/\s+/g, '');
+    return ALL_MEMORY_TYPES.find(t => t.toLowerCase() === normalized) ?? null;
+}
+
+function parseMarkdownToMemory(markdown: string): { sections: Record<string, Array<{ heading: string; content: string }>> } {
+    const sections: Record<string, Array<{ heading: string; content: string }>> = {};
     const lines = markdown.split('\n');
     let currentSection: string | null = null;
-    let currentEntry: any = null;
+    let currentEntry: { heading: string; content: string } | null = null;
 
     for (const line of lines) {
         if (line.startsWith('## ')) {
-            currentSection = line.substring(3).toLowerCase().replace(/\s+/g, '');
+            const type = canonicalMemoryType(line.substring(3));
+            currentSection = type ?? line.substring(3).trim();
+            currentEntry = null;
             sections[currentSection] = [];
         } else if (line.startsWith('### ') && currentSection) {
-            currentEntry = {};
+            currentEntry = { heading: line.substring(4).trim(), content: '' };
             sections[currentSection].push(currentEntry);
         } else if (currentEntry && line.trim()) {
-            if (!currentEntry.content) {
-                currentEntry.content = line;
-            } else {
-                currentEntry.content += '\n' + line;
-            }
+            currentEntry.content = currentEntry.content
+                ? currentEntry.content + '\n' + line
+                : line;
         }
     }
 
     return { sections };
+}
+
+function entriesToStructuredObject(entries: Array<{ heading: string; content: string }>): Record<string, any> {
+    const result: Record<string, any> = {};
+    for (const entry of entries) {
+        const lines = entry.content.split('\n').filter(l => l.trim());
+        if (lines.length > 0 && lines.every(l => l.trimStart().startsWith('- '))) {
+            result[entry.heading] = lines.map(l => l.trimStart().slice(2));
+        } else {
+            result[entry.heading] = entry.content;
+        }
+    }
+    return result;
 }
 
 /**

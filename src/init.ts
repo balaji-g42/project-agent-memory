@@ -77,7 +77,7 @@ async function initMemoryBank(projectName: string): Promise<string> {
             }
         }));
 
-        await client.upsert(collectionName, { points });
+        await client.upsert(collectionName, { wait: true, points });
     }
 
     return collectionName;
