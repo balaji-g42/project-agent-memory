@@ -19,15 +19,41 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 - A reachable Qdrant instance, **or** a PostgreSQL instance with the `vector` (pgvector) extension available
 - No API key with the default `onnx` provider
 
-## Installation
+## Install
 
-### Using npx (recommended)
+Three ways in, most to least automated. All of them still need a reachable Qdrant or Postgres - see [Setup](#setup) below.
+
+### 1. Claude Code plugin (recommended)
+
+Bundles the MCP server, the agent skill, and memory-first session hooks (detects `git commit`, nudges the agent to log it, hard-blocks `Stop` until it does) in one install.
+
+```bash
+git clone https://github.com/balaji-g42/memory-qdrant-mcp
+claude --plugin-dir ./memory-qdrant-mcp
+```
+
+On first enable, Claude Code prompts for `memory_backend` (`qdrant` or `postgres`) and the matching URL/key via the plugin's `userConfig` - nothing is hardcoded to Qdrant. Validate the manifest any time with `claude plugin validate .`.
+
+Includes: `.mcp.json` (server registration), `skill/` (agent skill), `hooks/` (`SessionStart` / `PostToolUse` / `Stop`), `commands/memory-sync.md` (`/memory-sync`).
+
+### 2. Agent Skill only
+
+Just the "when and how to use these tools" instructions - no hooks, no bundled server registration. Pair it with a manual MCP config (option 3).
+
+- **Claude Code**: copy `skill/*` into `.claude/skills/memory-qdrant-mcp/` (project) or `~/.claude/skills/memory-qdrant-mcp/` (global)
+- **Claude.ai**: zip `skill/` and upload via Settings → Features → Skills
+
+See [`skill/README.md`](skill/README.md).
+
+### 3. MCP server only (manual)
+
+Register the server yourself - no skill, no hooks.
 
 ```bash
 npx -y memory-qdrant-mcp
 ```
 
-### From source
+Or from source:
 
 ```bash
 git clone https://github.com/balaji-g42/memory-qdrant-mcp
@@ -36,6 +62,22 @@ npm install
 npm run build
 node dist/index.js
 ```
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "memory-qdrant-mcp"],
+      "env": {
+        "QDRANT_URL": "http://localhost:6333"
+      }
+    }
+  }
+}
+```
+
+Client-specific templates are in [`skill/`](skill/): `claude-config.example.json`, `vscode-mcp-config.example.json`, `cursor-config.example.json`.
 
 ## Setup
 
@@ -114,33 +156,6 @@ The full environment-variable reference, including the Postgres table, is in [`s
 | `openrouter` | Requires `OPENROUTER_API_KEY` |
 
 An unrecognized `EMBEDDING_PROVIDER` is a startup error.
-
-## MCP Configuration
-
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "command": "npx",
-      "args": ["-y", "memory-qdrant-mcp"],
-      "env": {
-        "QDRANT_URL": "http://localhost:6333"
-      }
-    }
-  }
-}
-```
-
-Client-specific templates are in [`skill/`](skill/): `claude-config.example.json`, `vscode-mcp-config.example.json`, `cursor-config.example.json`.
-
-## Agent Skill
-
-A Claude Agent Skill lives in [`skill/`](skill/) - install it so the agent knows when and how to use these tools without being told each session.
-
-- **Claude Code**: copy `skill/*` into `.claude/skills/memory-qdrant-mcp/` (project) or `~/.claude/skills/memory-qdrant-mcp/` (global)
-- **Claude.ai**: zip `skill/` and upload via Settings → Features → Skills
-
-See [`skill/README.md`](skill/README.md).
 
 ## Tools
 
@@ -246,6 +261,14 @@ memory-qdrant-mcp/
 ├── dist/                     # Compiled output (generated)
 ├── tests/
 ├── skill/                    # Claude Agent Skill, incl. the Qdrant->Postgres migration script
+├── .claude-plugin/
+│   └── plugin.json           # Plugin manifest (name, userConfig, skill path)
+├── hooks/
+│   ├── hooks.json             # SessionStart / PostToolUse / Stop wiring
+│   └── inject.js              # Memory-first rules + commit auto-logging + Stop hard-block
+├── commands/
+│   └── memory-sync.md         # /memory-sync
+├── .mcp.json                  # Plugin's bundled MCP server registration
 ├── package.json
 └── tsconfig.json
 ```
