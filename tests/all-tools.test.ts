@@ -54,11 +54,11 @@ describe('Memory MCP v3 tool surface', () => {
         }
     });
 
-    it('tools/list returns exactly the 7 v3 tools', async () => {
+    it('tools/list returns exactly the 8 v3 tools', async () => {
         const { tools } = await client.listTools();
         const names = tools.map(t => t.name).sort();
         expect(names).toEqual([
-            'memory_admin', 'memory_context', 'memory_create',
+            'code_graph', 'memory_admin', 'memory_context', 'memory_create',
             'memory_delete', 'memory_graph', 'memory_read', 'memory_update'
         ]);
     });

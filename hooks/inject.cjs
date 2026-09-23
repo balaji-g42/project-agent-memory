@@ -3,13 +3,18 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
-const JSON_EVENTS = new Set(["SessionStart", "PostToolUse", "Stop"]);
+const JSON_EVENTS = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]);
 
 const STATE_DIR = path.join(os.homedir(), ".claude", "state");
 const STATE_PREFIX = "pam-";
 const MAX_BLOCKS = 2;
+const CONTEXT_TIMEOUT_MS = 20000;
+const RECALL_TIMEOUT_MS = 8000;
+const INDEX_TIMEOUT_MS = 600000;
+const MIN_RECALL_PROMPT = 12;
 
 const MEMORY_TOOLS = new Set(["mcp__memory__memory_create", "mcp__memory__memory_update"]);
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 function matchIn(file, regex) {
   try {
@@ -52,7 +57,7 @@ function today() {
 const MEMORY_RULES = (name) =>
   `PERSISTENT MEMORY: this project's long-term memory is the project-agent-memory server, exposed ` +
   `as mcp__memory__* tools (memory_create, memory_read, memory_update, memory_delete, ` +
-  `memory_context, memory_graph, memory_admin).
+  `memory_context, memory_graph, memory_admin, code_graph).
 
 project_name:  '${name}' (case-sensitive; ask before using a different one)
 
@@ -60,17 +65,15 @@ Valid memory_type values: productContext, activeContext, systemPatterns, decisio
 contextHistory, customData, knowledgeLink (graph edges written by memory_graph, not created
 directly).
 
-MEMORY-FIRST RULES - mandatory, not advisory:
-  1. Session start: call memory_context for project_name '${name}'. It creates and seeds the
-     collection on first use.
-  2. Before touching a past problem: memory_read with the symptom in the words you would
-     actually type, not a tidy summary. Do not plan from a cold start.
-  3. As things settle, not batched at the end: memory_create the decision, progress line or
-     pattern.
-  4. Focus changed: memory_context with active_context to patch it.
-  5. Mistakes: memory_create a decisionLog or progress entry immediately, and promote the rule
-     into a systemPatterns entry.
-  6. If the memory tools are unavailable: say so in one line and continue without persistence.
+Project context is loaded below and relevant memories are recalled into each prompt
+automatically; call memory_read only when you need more than the recall shows.
+
+RULES:
+  1. As things settle, not batched at the end: memory_create the decision, progress line or
+     pattern. Mistakes: a decisionLog entry now, and the rule as a systemPatterns entry.
+  2. Focus changed: memory_context with active_context to patch it.
+  3. Finding code: code_graph op=query (symbol, callers, callees) before Grep or Glob.
+  4. If the memory tools are unavailable: say so in one line and continue without persistence.
 
 These tools are deferred - fetch each tool's schema with ToolSearch before the first call this
 session, then use the parameter names it returns. Keep writes small: one idea per entry. A
@@ -154,14 +157,137 @@ function git(cwd, args) {
   }
 }
 
+function safeName(name) {
+  return name.replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+function statePath(file) {
+  return path.join(STATE_DIR, `${STATE_PREFIX}${file}`);
+}
+
+function runCli(args, input, timeout) {
+  const local = path.join(__dirname, "..", "dist", "cli.js");
+  const [command, prefix, shell] = fs.existsSync(local)
+    ? [process.execPath, [local], false]
+    : ["npx", ["-y", "-p", "project-agent-memory@latest", "project-agent-memory-cli"], process.platform === "win32"];
+  try {
+    return execFileSync(command, [...prefix, ...args], {
+      encoding: "utf8",
+      input: input || "",
+      timeout,
+      shell,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeCodeStats(name, stats) {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(statePath(`codegraph-${safeName(name)}.json`), JSON.stringify(stats), "utf8");
+  } catch {}
+}
+
+function readCodeStats(name) {
+  try {
+    return JSON.parse(fs.readFileSync(statePath(`codegraph-${safeName(name)}.json`), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function onSessionStart(payload) {
   const cwd = payload.cwd || process.cwd();
-  return MEMORY_RULES(projectName(cwd));
+  const name = projectName(cwd);
+  let context = "";
+  try {
+    const loaded = JSON.parse(runCli(["context", name], "", CONTEXT_TIMEOUT_MS));
+    writeCodeStats(name, loaded.code);
+    const code = loaded.code.indexed
+      ? `Code graph: ${loaded.code.nodes} nodes indexed; it re-indexes after each Edit/Write.`
+      : `Code graph: not indexed. Offer to run code_graph op=index with root '${cwd}' (needs graphify: pipx install graphifyy).`;
+    context = `\n\n${code}\n\nLOADED CONTEXT:\n${loaded.text}`;
+  } catch {
+    context = "\n\nLOADED CONTEXT: unavailable - call memory_context for this project.";
+  }
+  return MEMORY_RULES(name) + context;
+}
+
+function onUserPromptSubmit(payload) {
+  const prompt = String(payload.prompt || "").trim();
+  if (prompt.length < MIN_RECALL_PROMPT) return "";
+  return runCli(["recall", projectName(payload.cwd || process.cwd())], prompt, RECALL_TIMEOUT_MS);
+}
+
+function onPreToolUse(payload) {
+  const stats = readCodeStats(projectName(payload.cwd || process.cwd()));
+  if (!stats || !stats.indexed) return "";
+  const nudged = statePath(`nudged-${safeName(payload.session_id || "default")}`);
+  if (fs.existsSync(nudged)) return "";
+  try {
+    fs.writeFileSync(nudged, "", "utf8");
+  } catch {}
+  return (
+    `The code graph is indexed (${stats.nodes} nodes). For finding a symbol, its callers or ` +
+    "its dependencies, code_graph op=query is cheaper than Grep/Glob. Grep is fine for literal " +
+    "strings, config values and non-code files."
+  );
+}
+
+function reindex(name, cwd) {
+  const lock = statePath(`codegraph-lock-${safeName(name)}`);
+  const dirty = `${lock}.dirty`;
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(lock, String(process.pid), { flag: "wx" });
+  } catch {
+    let fresh = false;
+    try {
+      fresh = Date.now() - fs.statSync(lock).mtimeMs < INDEX_TIMEOUT_MS;
+    } catch {}
+    if (fresh) {
+      try {
+        fs.writeFileSync(dirty, "", "utf8");
+      } catch {}
+      return;
+    }
+    try {
+      fs.writeFileSync(lock, String(process.pid), "utf8");
+    } catch {}
+  }
+  try {
+    do {
+      try {
+        fs.unlinkSync(dirty);
+      } catch {}
+      const result = runCli(["index", name, cwd], "", INDEX_TIMEOUT_MS);
+      if (result) {
+        try {
+          writeCodeStats(name, { indexed: true, nodes: JSON.parse(result).nodes });
+        } catch {}
+      }
+    } while (fs.existsSync(dirty));
+  } finally {
+    try {
+      fs.unlinkSync(lock);
+    } catch {}
+  }
 }
 
 function onPostToolUse(payload) {
   const tool = payload.tool_name || "";
   const input = payload.tool_input || {};
+
+  if (EDIT_TOOLS.has(tool)) {
+    const cwd = payload.cwd || process.cwd();
+    const name = projectName(cwd);
+    const stats = readCodeStats(name);
+    if (stats && stats.indexed) reindex(name, cwd);
+    return "";
+  }
 
   if (MEMORY_TOOLS.has(tool)) {
     clearSentinel(payload);
@@ -240,6 +366,8 @@ function onStop(payload) {
 
 const HANDLERS = {
   SessionStart: onSessionStart,
+  UserPromptSubmit: onUserPromptSubmit,
+  PreToolUse: onPreToolUse,
   PostToolUse: onPostToolUse,
   Stop: onStop,
 };

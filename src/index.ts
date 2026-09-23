@@ -29,6 +29,7 @@ import {
     importMemoryFromMarkdown
 } from "./mcp_tools/memoryBankTools.js";
 import { summarizeText } from "./mcp_tools/summarizer.js";
+import { indexCodeGraph, queryCodeGraph, codeGraphStats } from "./mcp_tools/codeGraph.js";
 
 process.on("unhandledRejection", (reason) => {
     console.error("UnhandledRejection:", reason);
@@ -228,6 +229,28 @@ server.registerTool('memory_admin', {
     }
     if (!params.content) throw new Error("op=summarize requires content");
     return text(await summarizeText(params.content));
+});
+
+server.registerTool('code_graph', {
+    description: "Code structure graph built from the repo's AST (functions, classes, imports, calls). Prefer op=query over grepping to find where a symbol lives, what calls it and what it depends on. op=query matches the text semantically and by exact name, then walks call/import edges up to depth hops. op=index (re)builds the graph incrementally from root using graphify; op=stats reports whether it is indexed.",
+    inputSchema: z.object({
+        project_name: z.string().describe("Project name, case-sensitive"),
+        op: z.enum(["query", "index", "stats"]).describe("Code graph operation"),
+        query: z.string().optional().describe("op=query: symbol name or description of the code you are looking for"),
+        depth: z.number().int().min(0).max(3).default(1).describe("op=query: edge hops to walk from the matches"),
+        limit: z.number().int().min(1).max(20).default(5).describe("op=query: number of seed matches"),
+        relation: z.string().optional().describe("op=query: only walk edges of this relation, e.g. calls, imports"),
+        root: z.string().optional().describe("op=index: absolute repo path; defaults to the server's working directory")
+    })
+}, async (params) => {
+    if (params.op === "index") {
+        return text(await indexCodeGraph(params.project_name, params.root ?? process.cwd()));
+    }
+    if (params.op === "stats") {
+        return text(await codeGraphStats(params.project_name));
+    }
+    if (!params.query) throw new Error("op=query requires query");
+    return text(await queryCodeGraph(params.project_name, params.query, params.depth, params.limit, params.relation ?? null));
 });
 
 async function main() {

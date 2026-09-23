@@ -5,8 +5,31 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.js\"",
-            "timeout": 15
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.cjs\"",
+            "timeout": 25
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.cjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.cjs\"",
+            "timeout": 5
           }
         ]
       }
@@ -17,8 +40,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.cjs\"",
             "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.cjs\"",
+            "async": true,
+            "timeout": 600
           }
         ]
       }
@@ -28,7 +62,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.cjs\"",
             "timeout": 15
           }
         ]
