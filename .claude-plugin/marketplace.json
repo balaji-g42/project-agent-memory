@@ -1,0 +1,13 @@
+{
+  "name": "balaji-g42",
+  "owner": { "name": "Balaji.G" },
+  "description": "Claude Code plugins by balaji-g42.",
+  "plugins": [
+    {
+      "name": "project-agent-memory",
+      "source": "./",
+      "description": "Persistent, semantically searchable agent memory backed by Qdrant or PostgreSQL/pgvector, with a code index graph and memory-first session hooks.",
+      "category": "productivity"
+    }
+  ]
+}

@@ -2,7 +2,7 @@
   "name": "project-agent-memory",
   "displayName": "Project Agent Memory",
   "description": "Persistent, semantically searchable agent memory backed by Qdrant or PostgreSQL/pgvector, with memory-first session hooks and a mandatory commit-logging Stop hook.",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "author": { "name": "Balaji.G" },
   "homepage": "https://github.com/balaji-g42/project-agent-memory",
   "repository": "https://github.com/balaji-g42/project-agent-memory",

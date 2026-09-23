@@ -4,7 +4,7 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 
 ## Features
 
-- **7 MCP tools**: `memory_create`, `memory_read`, `memory_update`, `memory_delete`, `memory_context`, `memory_graph`, `memory_admin`
+- **8 MCP tools**: `memory_create`, `memory_read`, `memory_update`, `memory_delete`, `memory_context`, `memory_graph`, `memory_admin`, `code_graph`
 - **Dual storage backend**: `MEMORY_BACKEND=qdrant` (default) or `MEMORY_BACKEND=postgres`, same tool surface either way - no code change to switch, and Qdrant deployments need no env changes to keep working. The `postgres` backend talks to Postgres/pgvector through a [pREST](https://prest.dev) instance, not a direct DB connection - vectors travel over an `X-Vector` header (registered pREST queries can't carry them as URL params without hitting HTTP 414)
 - **Local embeddings by default**: ONNX CPU inference in-process via `@huggingface/transformers`; no embedding service, no API key, nothing leaves the machine except the backend writes
 - **Configurable vector dimension**: `VECTOR_DIM` (default 768), Matryoshka-truncated and re-normalized
@@ -26,6 +26,23 @@ Three ways in, most to least automated. All of them still need a reachable Qdran
 ### 1. Claude Code plugin (recommended)
 
 Bundles the MCP server, the agent skill, and memory-first session hooks (detects `git commit`, nudges the agent to log it, hard-blocks `Stop` until it does) in one install.
+
+The repo is its own marketplace (`balaji-g42`). Inside Claude Code:
+
+```text
+/plugin marketplace add balaji-g42/project-agent-memory
+/plugin install project-agent-memory@balaji-g42
+```
+
+Updates: third-party marketplaces do not auto-update by default. Turn it on once with `/plugin marketplace configure balaji-g42`, or in `settings.json`:
+
+```json
+{ "pluginMarketplaceSettings": { "balaji-g42": { "autoUpdate": true } } }
+```
+
+Or update by hand with `/plugin marketplace update balaji-g42` then `/plugin update project-agent-memory@balaji-g42`. A new plugin version is only seen when `version` in `.claude-plugin/plugin.json` changes, so bump it on every release.
+
+For local development, load a checkout directly:
 
 ```bash
 git clone https://github.com/balaji-g42/project-agent-memory
@@ -189,7 +206,7 @@ An unrecognized `EMBEDDING_PROVIDER` is a startup error.
 
 ## Tools
 
-All seven take `project_name` (case-sensitive; it selects the `memory_bank_<project_name>` collection).
+All eight take `project_name` (case-sensitive; it selects the `memory_bank_<project_name>` collection).
 
 `memory_type` is one of: `productContext`, `activeContext`, `systemPatterns`, `decisionLog`, `progress`, `contextHistory`, `customData`, `knowledgeLink`.
 
@@ -227,6 +244,22 @@ Edges are stored in the same collection as ordinary points of type `knowledgeLin
 - `delete_collection` - permanently deletes the entire memory bank (collection and all its points) for `project_name`. No confirmation step - irreversible.
 
 Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-REFERENCE.md).
+
+### code_graph
+Code index graph, stored in its own `code_graph_<project_name>` collection, separate from the memory bank. `project_name`, `op`:
+- `index` - optional `root` (default: the server's working directory). Runs `graphify extract <root> --code-only --no-cluster` with its output in the OS temp dir, so nothing is written into the repo. It re-embeds only the nodes whose label, location or edges changed and deletes stale ones. Returns `{ nodes, upserted, deleted }`.
+- `query` - `query`, `depth` (0-3, default 1), `limit` (1-20, default 5), optional `relation`. Seeds come from a semantic search plus an exact label match, followed by a walk over the callers and callees stored on each node. Returns text, with `*` marking a seed and `-` marking a neighbour, and `-calls->` / `<-calls-` for edges.
+- `stats` - returns `{ indexed, nodes }`.
+
+Requires [graphify](https://pypi.org/project/graphifyy/) on `PATH`: `pipx install graphifyy`.
+
+Plugin hooks built on it:
+- `SessionStart` loads the context and reports the code-graph status.
+- `UserPromptSubmit` injects the top matching memories and code nodes.
+- `PreToolUse` on `Grep|Glob` nudges once per session towards `code_graph`.
+- `PostToolUse` on edits reindexes asynchronously.
+
+The hooks only act on the graph after a first `op=index`.
 
 ### Migrating from memory-qdrant-mcp v2.x
 
@@ -446,7 +479,7 @@ project-agent-memory/
 │   └── plugin.json           # Plugin manifest (name, userConfig, skill path)
 ├── hooks/
 │   ├── hooks.json             # SessionStart / PostToolUse / Stop wiring
-│   └── inject.js              # Memory-first rules + commit auto-logging + Stop hard-block
+│   └── inject.cjs             # Context injection, prompt recall, code-graph reindex, commit auto-logging + Stop hard-block
 ├── commands/
 │   └── memory-sync.md         # /memory-sync
 ├── .mcp.json                  # Plugin's bundled MCP server registration

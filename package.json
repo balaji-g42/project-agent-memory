@@ -1,10 +1,11 @@
 {
   "name": "project-agent-memory",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "project-agent-memory": "dist/index.js"
+    "project-agent-memory": "dist/index.js",
+    "project-agent-memory-cli": "dist/cli.js"
   },
   "files": [
     "dist/",
