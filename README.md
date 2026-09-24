@@ -49,7 +49,7 @@ git clone https://github.com/balaji-g42/project-agent-memory
 claude --plugin-dir ./project-agent-memory
 ```
 
-On first enable, Claude Code prompts for `memory_backend` (`qdrant` or `postgres`) and the matching URL/key via the plugin's `userConfig` - nothing is hardcoded to Qdrant. Validate the manifest any time with `claude plugin validate .`.
+The server, the CLI and the hooks read their settings from `~/mcp/project-agent-memory/config.json` (keys match the environment variables below, e.g. `{"MEMORY_BACKEND": "qdrant", "QDRANT_URL": "...", "QDRANT_API_KEY": "..."}`). A non-empty environment variable overrides the file; defaults apply when neither is set. Validate the manifest any time with `claude plugin validate .`.
 
 Includes: `.mcp.json` (server registration), `skill/` (agent skill), `hooks/` (`SessionStart` / `PostToolUse` / `Stop`), `commands/memory-sync.md` (`/memory-sync`).
 
@@ -476,7 +476,7 @@ project-agent-memory/
 ├── tests/
 ├── skill/                    # Claude Agent Skill, incl. the Qdrant->Postgres migration script
 ├── .claude-plugin/
-│   └── plugin.json           # Plugin manifest (name, userConfig, skill path)
+│   └── plugin.json           # Plugin manifest (name, skill path)
 ├── hooks/
 │   ├── hooks.json             # SessionStart / PostToolUse / Stop wiring
 │   └── inject.cjs             # Context injection, prompt recall, code-graph reindex, commit auto-logging + Stop hard-block

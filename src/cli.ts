@@ -2,23 +2,11 @@
 
 import "dotenv/config";
 
-const PLUGIN_OPTIONS: Record<string, string> = {
-    CLAUDE_PLUGIN_OPTION_MEMORY_BACKEND: "MEMORY_BACKEND",
-    CLAUDE_PLUGIN_OPTION_QDRANT_URL: "QDRANT_URL",
-    CLAUDE_PLUGIN_OPTION_QDRANT_API_KEY: "QDRANT_API_KEY",
-    CLAUDE_PLUGIN_OPTION_POSTGRES_URL: "POSTGRES_URL",
-    CLAUDE_PLUGIN_OPTION_POSTGRES_PASSWORD: "POSTGRES_PASSWORD"
-};
-
 const MIN_MEMORY_SCORE = 0.5;
 const MIN_CODE_SCORE = 0.5;
 const MAX_MEMORY_CHARS = 300;
 const MAX_CONTEXT_PATTERNS = 20;
 const MAX_CONTEXT_CHARS = 3000;
-
-for (const [from, to] of Object.entries(PLUGIN_OPTIONS)) {
-    if (process.env[from] && !process.env[to]) process.env[to] = process.env[from];
-}
 
 async function recall(projectName: string, prompt: string): Promise<string> {
     const { queryMemory } = await import("./mcp_tools/memoryBankTools.js");
