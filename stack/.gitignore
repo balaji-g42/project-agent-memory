@@ -1,0 +1,4 @@
+qdrant/data/
+pgvector/postgres_data/
+pgvector/prest_queries/
+pgvector/secrets/
