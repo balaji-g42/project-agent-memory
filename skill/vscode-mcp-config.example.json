@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/servers/main/schema.json",
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": [
         "-y",

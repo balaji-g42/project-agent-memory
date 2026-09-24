@@ -13,8 +13,47 @@ const RECALL_TIMEOUT_MS = 8000;
 const INDEX_TIMEOUT_MS = 600000;
 const MIN_RECALL_PROMPT = 12;
 
-const MEMORY_TOOLS = new Set(["mcp__memory__memory_create", "mcp__memory__memory_update"]);
+const COMMIT_WINDOW_S = 120;
+
+const CONFIG_FILE = path.join(os.homedir(), "mcp", "project-agent-memory", "config.json");
+const MEMORY_TOOLS = /^mcp__(plugin_project-agent-memory_)?pam__memory_(create|update)$/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+function readConfigFile() {
+  try {
+    const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function setting(file, key) {
+  const fromEnv = process.env[key];
+  if (fromEnv !== undefined && fromEnv.trim() !== "") return fromEnv;
+  const fromFile = file[key];
+  if (fromFile === undefined || fromFile === null || String(fromFile).trim() === "") return undefined;
+  return String(fromFile);
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).host || "an unknown host";
+  } catch {
+    return "an unknown host";
+  }
+}
+
+function memorySetup() {
+  const file = readConfigFile();
+  const mode = (setting(file, "MODE") || (process.env.CLAUDE_PLUGIN_ROOT ? "plugin" : "mcp")).toLowerCase();
+  const prefix = mode === "plugin" ? "mcp__plugin_project-agent-memory_pam__" : "mcp__pam__";
+  const backend =
+    (setting(file, "MEMORY_BACKEND") || "qdrant").toLowerCase() === "postgres"
+      ? `pgvector via pREST at ${hostOf(setting(file, "PREST_URL"))}`
+      : `Qdrant at ${hostOf(setting(file, "QDRANT_URL") || "http://localhost:6333")}`;
+  return { mode, prefix, backend };
+}
 
 function matchIn(file, regex) {
   try {
@@ -54,10 +93,10 @@ function today() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-const MEMORY_RULES = (name) =>
-  `PERSISTENT MEMORY: this project's long-term memory is the project-agent-memory server, exposed ` +
-  `as mcp__memory__* tools (memory_create, memory_read, memory_update, memory_delete, ` +
-  `memory_context, memory_graph, memory_admin, code_graph).
+const MEMORY_RULES = (name, { mode, prefix, backend }) =>
+  `PERSISTENT MEMORY: this project's long-term memory is the project-agent-memory server ` +
+  `(${backend}, ${mode} mode), exposed as ${prefix}* tools (memory_create, memory_read, ` +
+  `memory_update, memory_delete, memory_context, memory_graph, memory_admin, code_graph).
 
 project_name:  '${name}' (case-sensitive; ask before using a different one)
 
@@ -208,12 +247,12 @@ function onSessionStart(payload) {
     writeCodeStats(name, loaded.code);
     const code = loaded.code.indexed
       ? `Code graph: ${loaded.code.nodes} nodes indexed; it re-indexes after each Edit/Write.`
-      : `Code graph: not indexed. Offer to run code_graph op=index with root '${cwd}' (needs graphify: pipx install graphifyy).`;
+      : "Code graph: not indexed.";
     context = `\n\n${code}\n\nLOADED CONTEXT:\n${loaded.text}`;
   } catch {
     context = "\n\nLOADED CONTEXT: unavailable - call memory_context for this project.";
   }
-  return MEMORY_RULES(name) + context;
+  return MEMORY_RULES(name, memorySetup()) + context;
 }
 
 function onUserPromptSubmit(payload) {
@@ -289,7 +328,7 @@ function onPostToolUse(payload) {
     return "";
   }
 
-  if (MEMORY_TOOLS.has(tool)) {
+  if (MEMORY_TOOLS.test(tool)) {
     clearSentinel(payload);
     return "";
   }
@@ -302,6 +341,8 @@ function onPostToolUse(payload) {
   }
 
   const cwd = payload.cwd || process.cwd();
+  const moved = git(cwd, ["reflog", "-1", "--date=unix", "--format=%gd"]).match(/\{(\d+)\}/);
+  if (!moved || Date.now() / 1000 - Number(moved[1]) > COMMIT_WINDOW_S) return "";
   const head = git(cwd, ["log", "-1", "--format=%H%n%s"]);
   if (!head) return "";
 

@@ -83,7 +83,7 @@ node dist/index.js
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -288,7 +288,7 @@ Local (embeddings computed on this machine, Qdrant on localhost):
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -307,7 +307,7 @@ Self-hosted / cloud Qdrant (remote instance, API key, embeddings still local):
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -361,7 +361,7 @@ Drop `--dry-run` once the reported counts look right. Use `--all` instead of `--
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -384,7 +384,7 @@ Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens 
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {

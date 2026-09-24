@@ -36,7 +36,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|PowerShell|mcp__memory__memory_create|mcp__memory__memory_update",
+        "matcher": "Bash|PowerShell|mcp__(plugin_project-agent-memory_)?pam__memory_(create|update)",
         "hooks": [
           {
             "type": "command",
