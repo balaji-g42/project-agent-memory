@@ -10,7 +10,8 @@ type Env = Record<string, string>;
 type Opts = Record<string, string | boolean>;
 
 const PKG_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const VERSION: string = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, "package.json"), "utf8")).version;
+const PKG = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, "package.json"), "utf8"));
+const VERSION: string = PKG.publishedVersion || PKG.version;
 const HOME = os.homedir();
 const CLAUDE_DIR = path.join(HOME, ".claude");
 const CLAUDE_JSON = path.join(HOME, ".claude.json");
@@ -337,6 +338,54 @@ async function verify(client: { getCollections(): Promise<{ collections: Array<{
     log("verify passed: the CLI read config.json and reached the store");
 }
 
+function projectName(root: string): string {
+    const match = (file: string, re: RegExp) => {
+        try {
+            return fs.readFileSync(path.join(root, file), "utf8").trim().match(re)?.[1].trim() || null;
+        } catch {
+            return null;
+        }
+    };
+    const packageName = () => {
+        try {
+            const name = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).name;
+            return typeof name === "string" && name ? name : null;
+        } catch {
+            return null;
+        }
+    };
+    return (
+        match("pyproject.toml", /^\s*name\s*=\s*["']([^"']+)["']/m) ||
+        match("setup.py", /name\s*=\s*["']([^"']+)["']/) ||
+        match("setup.cfg", /^\s*name\s*=\s*(.+)$/m) ||
+        packageName() ||
+        match("pubspec.yaml", /^name:\s*(\S+)/m) ||
+        path.basename(root) ||
+        "default"
+    );
+}
+
+function indexProject() {
+    if (opts["no-index"]) {
+        log("code index skipped (--no-index)");
+        return;
+    }
+    try {
+        const root = path.resolve(typeof opts["index-root"] === "string" ? opts["index-root"] : process.cwd());
+        const name = projectName(path.normalize(root));
+        log(`indexing ${root} as project ${name}`);
+        const r = spawnSync(process.execPath, [path.join(PKG_ROOT, "dist", "cli.js"), "index", name, root], { encoding: "utf8" });
+        if (r.status !== 0) throw new Error((r.stderr || r.stdout).trim().slice(-500));
+        const { nodes } = JSON.parse(r.stdout);
+        const stateDir = path.join(CLAUDE_DIR, "state");
+        fs.mkdirSync(stateDir, { recursive: true });
+        fs.writeFileSync(path.join(stateDir, `pam-codegraph-${name.replace(/[^A-Za-z0-9_.-]/g, "_")}.json`), JSON.stringify({ indexed: true, nodes }), "utf8");
+        log(`code index: ${nodes} nodes`);
+    } catch (error) {
+        log(`warning: code index failed, run code_graph op=index later: ${(error as Error).message}`);
+    }
+}
+
 export async function setup(argv: string[]) {
     opts = parseArgs(argv);
     console.log(`project-agent-memory ${VERSION} setup\n`);
@@ -379,7 +428,10 @@ export async function setup(argv: string[]) {
             }
         }
         register(mode, existing.legacy, replace, vaultPath);
-        if (client) await verify(client);
+        if (client) {
+            await verify(client);
+            indexProject();
+        }
         console.log(`\nDone (${describe(env)}). Restart Claude Code to load it.`);
     } finally {
         rl?.close();
