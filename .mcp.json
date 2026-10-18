@@ -2,7 +2,7 @@
   "mcpServers": {
     "pam": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/server.cjs"]
+      "args": ["${CLAUDE_PLUGIN_ROOT:-.}/bin/server.cjs"]
     }
   }
 }
