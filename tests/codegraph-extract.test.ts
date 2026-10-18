@@ -13,7 +13,8 @@ const EXPECTED_IMPORTS = [
     "com/x/J.java -> com/x/Util.java",
     "k.py -> pkg/mod.py",
     "m.js -> n.js",
-    "ui.tsx -> b.ts"
+    "ui.tsx -> b.ts",
+    "ui.tsx -> src/lib/u.ts"
 ];
 
 const EXPECTED_CALLS = [
@@ -37,7 +38,8 @@ const EXPECTED_CALLS = [
     "r.rs::R.m -> r.rs::free EXTRACTED",
     "r.rs::R.m -> r.rs::R.n EXTRACTED",
     "ui.tsx::Button -> b.ts::helper EXTRACTED",
-    "ui.tsx::Page -> ui.tsx::Button EXTRACTED"
+    "ui.tsx::Page -> ui.tsx::Button EXTRACTED",
+    "ui.tsx::Page -> src/lib/u.ts::useU EXTRACTED"
 ];
 
 async function summarize(root: string) {
@@ -55,6 +57,11 @@ describe("extractCodeGraph", () => {
         const { imports, calls } = await summarize(FIXTURE);
         expect(imports).toEqual([...EXPECTED_IMPORTS].sort());
         expect(calls).toEqual([...EXPECTED_CALLS].sort());
+    });
+
+    it("does not guess a member call's target in a class the caller never names", async () => {
+        const { calls } = await summarize(FIXTURE);
+        expect(calls.some((c) => c.startsWith("com/x/Other.java::Other.same ->"))).toBe(false);
     });
 
     it("builds file and qualified symbol nodes with graphify-style labels and line locations", async () => {

@@ -95,8 +95,8 @@ function resolveImport(grammar: string, rel: string, raw: string, files: Set<str
     const pick = (candidates: string[]) => candidates.map((c) => posix.normalize(c)).find((c) => files.has(c));
 
     if (grammar === "javascript" || grammar === "typescript" || grammar === "tsx") {
-        if (!raw.startsWith(".")) return undefined;
-        const base = posix.join(dir, raw);
+        if (!raw.startsWith(".") && !raw.startsWith("@/")) return undefined;
+        const base = raw.startsWith("@/") ? `src/${raw.slice(2)}` : posix.join(dir, raw);
         const stripped = base.match(/^(.*)\.[mc]?jsx?$/)?.[1];
         return pick([
             base,
@@ -155,6 +155,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
     const defsByFile = new Map<string, Map<string, string[]>>();
     const defsGlobal = new Map<string, Set<string>>();
     const methods = new Set<string>();
+    const typeWords = new Map<string, Set<string>>();
     parserReady ??= Parser.init();
     await parserReady;
     const parser = new Parser();
@@ -169,6 +170,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
             continue;
         }
         parser.setLanguage(language);
+        typeWords.set(rel, new Set(source.match(/\b[A-Z]\w*/g) ?? []));
         const tree = parser.parse(source);
         if (!tree) continue;
 
@@ -273,7 +275,12 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
         const notSelf = (ids: Iterable<string>) => [...ids].filter((id) => id !== call.from);
         const same = notSelf(defsByFile.get(call.file)?.get(call.name) ?? []);
         const imported = notSelf([...(imports.get(call.file) ?? [])].flatMap((f) => defsByFile.get(f)?.get(call.name) ?? []));
-        const global = notSelf(defsGlobal.get(call.name) ?? []);
+        const words = typeWords.get(call.file);
+        const global = notSelf(defsGlobal.get(call.name) ?? []).filter((id) => {
+            if (!call.member) return true;
+            const owner = id.split("::")[1].split(".").slice(-2, -1)[0];
+            return !owner || !!words?.has(owner);
+        });
         const target = same.length ? pick(same) : imported.length ? pick(imported) : pick(global);
         const confidence = same.length || imported.length ? "EXTRACTED" : "INFERRED";
         if (target) edges.push({ source: call.from, target, relation: "calls", confidence });
