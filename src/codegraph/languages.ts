@@ -8,7 +8,7 @@ import kotlin from "./queries/kotlin.js";
 import python from "./queries/python.js";
 import rust from "./queries/rust.js";
 import swift from "./queries/swift.js";
-import typescript from "./queries/typescript.js";
+import typescript, { tsx as tsxQuery } from "./queries/typescript.js";
 
 export interface LanguageSpec {
     grammar: string;
@@ -18,7 +18,7 @@ export interface LanguageSpec {
 export const GRAMMAR_DIR = fileURLToPath(new URL("../../grammars/", import.meta.url));
 
 const ts: LanguageSpec = { grammar: "typescript", query: typescript };
-const tsx: LanguageSpec = { grammar: "tsx", query: typescript };
+const tsx: LanguageSpec = { grammar: "tsx", query: tsxQuery };
 const js: LanguageSpec = { grammar: "javascript", query: javascript };
 const kt: LanguageSpec = { grammar: "kotlin", query: kotlin };
 

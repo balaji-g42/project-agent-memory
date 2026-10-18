@@ -11,5 +11,5 @@ export default `
 (type_spec name: (type_identifier) @name type: (struct_type)) @definition.class
 (type_spec name: (type_identifier) @name type: (interface_type)) @definition.interface
 (call_expression function: (identifier) @name) @call
-(call_expression function: (selector_expression field: (field_identifier) @name)) @call
+(call_expression function: (selector_expression field: (field_identifier) @name)) @call.member
 `;

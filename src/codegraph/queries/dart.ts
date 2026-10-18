@@ -5,7 +5,7 @@ export default `
 (extension_declaration class: (type_identifier) @name) @container
 (function_signature name: (identifier) @name) @definition.function
 ((identifier) @name . (selector (argument_part)) @call)
-((selector (unconditional_assignable_selector (identifier) @name)) . (selector (argument_part)) @call)
-((selector (conditional_assignable_selector (identifier) @name)) . (selector (argument_part)) @call)
+((selector (unconditional_assignable_selector (identifier) @name)) . (selector (argument_part)) @call.member)
+((selector (conditional_assignable_selector (identifier) @name)) . (selector (argument_part)) @call.member)
 (library_import (import_specification (configurable_uri (uri (string_literal) @source))))
 `;

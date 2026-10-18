@@ -42,6 +42,7 @@ interface PendingCall {
     file: string;
     from: string;
     name: string;
+    member: boolean;
 }
 
 let parserReady: Promise<void> | undefined;
@@ -153,6 +154,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
     const imports = new Map<string, Set<string>>();
     const defsByFile = new Map<string, Map<string, string[]>>();
     const defsGlobal = new Map<string, Set<string>>();
+    const methods = new Set<string>();
     parserReady ??= Parser.init();
     await parserReady;
     const parser = new Parser();
@@ -175,7 +177,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
         const scopes: Scope[] = [];
         const seen = new Set<number>();
         const fileImports = new Set<string>();
-        const fileCalls: { node: Node; name: string }[] = [];
+        const fileCalls: { node: Node; name: string; member: boolean }[] = [];
 
         for (const match of query.matches(tree.rootNode)) {
             const cap = new Map(match.captures.map((c) => [c.name, c.node]));
@@ -187,9 +189,9 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
                 continue;
             }
             if (!name) continue;
-            const callNode = cap.get("call");
+            const callNode = cap.get("call") ?? cap.get("call.member");
             if (callNode) {
-                fileCalls.push({ node: callNode, name });
+                fileCalls.push({ node: callNode, name, member: cap.has("call.member") });
                 continue;
             }
             const defCapture = match.captures.find((c) => c.name.startsWith("definition.") || c.name === "container");
@@ -237,6 +239,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
                 source_location: `L${s.node.startPosition.row + 1}`
             });
             local.set(s.name, [...(local.get(s.name) ?? []), s.id]);
+            if (s.kind === "method") methods.add(s.id);
             defsGlobal.set(s.name, (defsGlobal.get(s.name) ?? new Set()).add(s.id));
         }
         for (const s of defs) {
@@ -251,7 +254,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
             for (const s of defs) {
                 if (s.start <= pos && pos < s.end && (!caller || s.start >= caller.start)) caller = s;
             }
-            calls.push({ file: rel, from: caller?.id ?? rel, name: call.name });
+            calls.push({ file: rel, from: caller?.id ?? rel, name: call.name, member: call.member });
         }
 
         for (const target of fileImports) edges.push({ source: rel, target, relation: "imports" });
@@ -262,24 +265,18 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
     parser.delete();
 
     for (const call of calls) {
-        const same = defsByFile.get(call.file)?.get(call.name) ?? [];
-        let target: string | undefined;
-        let confidence = "EXTRACTED";
-        if (same.length) {
-            if (same.length === 1) target = same[0];
-        } else {
-            const imported = [...(imports.get(call.file) ?? [])].flatMap((f) => defsByFile.get(f)?.get(call.name) ?? []);
-            if (imported.length) {
-                if (imported.length === 1) target = imported[0];
-            } else {
-                const global = defsGlobal.get(call.name);
-                if (global?.size === 1) {
-                    target = [...global][0];
-                    confidence = "INFERRED";
-                }
-            }
-        }
-        if (target && target !== call.from) edges.push({ source: call.from, target, relation: "calls", confidence });
+        const pick = (ids: string[]) => {
+            if (ids.length === 1) return ids[0];
+            const plain = call.member ? [] : ids.filter((id) => !methods.has(id));
+            return plain.length === 1 ? plain[0] : undefined;
+        };
+        const notSelf = (ids: Iterable<string>) => [...ids].filter((id) => id !== call.from);
+        const same = notSelf(defsByFile.get(call.file)?.get(call.name) ?? []);
+        const imported = notSelf([...(imports.get(call.file) ?? [])].flatMap((f) => defsByFile.get(f)?.get(call.name) ?? []));
+        const global = notSelf(defsGlobal.get(call.name) ?? []);
+        const target = same.length ? pick(same) : imported.length ? pick(imported) : pick(global);
+        const confidence = same.length || imported.length ? "EXTRACTED" : "INFERRED";
+        if (target) edges.push({ source: call.from, target, relation: "calls", confidence });
     }
 
     return { nodes, edges };

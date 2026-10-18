@@ -6,6 +6,6 @@ export default `
 (enum_declaration name: (identifier) @name) @definition.enum
 (method_declaration name: (identifier) @name) @definition.method
 (invocation_expression function: (identifier) @name) @call
-(invocation_expression function: (member_access_expression name: (identifier) @name)) @call
+(invocation_expression function: (member_access_expression name: (identifier) @name)) @call.member
 (object_creation_expression type: (identifier) @name) @call
 `;

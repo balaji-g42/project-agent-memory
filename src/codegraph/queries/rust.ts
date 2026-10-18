@@ -8,6 +8,6 @@ export default `
 (impl_item type: (type_identifier) @name) @container
 (impl_item type: (generic_type type: (type_identifier) @name)) @container
 (call_expression function: (identifier) @name) @call
-(call_expression function: (field_expression field: (field_identifier) @name)) @call
+(call_expression function: (field_expression field: (field_identifier) @name)) @call.member
 (call_expression function: (scoped_identifier name: (identifier) @name)) @call
 `;
