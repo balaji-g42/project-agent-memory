@@ -44,6 +44,7 @@ interface PendingCall {
     name: string;
     member: boolean;
     type?: string;
+    path: string[];
     exact: boolean;
 }
 
@@ -84,12 +85,6 @@ async function listFiles(root: string): Promise<string[]> {
     } catch {
         return walk(root, "");
     }
-}
-
-function bodyEnd(node: Node): number {
-    const anchor = node.parent?.type === "method_signature" ? node.parent : node;
-    const next = anchor.nextNamedSibling;
-    return next?.type === "function_body" ? next.endIndex : node.endIndex;
 }
 
 function resolveImport(grammar: string, rel: string, raw: string, files: Set<string>, byStem: Map<string, string[]>): string | undefined {
@@ -157,6 +152,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
     const defsByFile = new Map<string, Map<string, string[]>>();
     const defsGlobal = new Map<string, Set<string>>();
     const methods = new Set<string>();
+    const fieldTypes = new Map<string, string | null>();
     parserReady ??= Parser.init();
     await parserReady;
     const parser = new Parser();
@@ -181,14 +177,16 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
         const fileImports = new Set<string>();
         const fileCalls = new Map<number, { node: Node; name: string; member: boolean; receiver?: string }>();
         const declTypes = new Map<string, string | null>();
+        const decls: { name: string; type: string; pos: number }[] = [];
 
         for (const match of query.matches(tree.rootNode)) {
             const cap = new Map(match.captures.map((c) => [c.name, c.node]));
-            const declName = cap.get("decl.name")?.text;
+            const declNode = cap.get("decl.name");
             const declType = cap.get("decl.type")?.text;
-            if (declName && declType) {
-                const known = declTypes.get(declName);
-                declTypes.set(declName, known === undefined || known === declType ? declType : null);
+            if (declNode && declType) {
+                const known = declTypes.get(declNode.text);
+                declTypes.set(declNode.text, known === undefined || known === declType ? declType : null);
+                decls.push({ name: declNode.text, type: declType, pos: declNode.startIndex });
                 continue;
             }
             const name = cap.get("name")?.text;
@@ -215,7 +213,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
                 scope: cap.get("scope")?.text,
                 node,
                 start: node.startIndex,
-                end: bodyEnd(node),
+                end: node.endIndex,
                 qualified: "",
                 id: ""
             });
@@ -234,6 +232,19 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
                 s.kind = "method";
             }
             stack.push(s);
+        }
+
+        const innermost = (pos: number) => {
+            let found: Scope | undefined;
+            for (const s of scopes) if (s.start <= pos && pos < s.end && (!found || s.start >= found.start)) found = s;
+            return found;
+        };
+        for (const d of decls) {
+            const owner = innermost(d.pos);
+            if (!owner || !CLASS_KINDS.has(owner.kind)) continue;
+            const key = `${owner.name}.${d.name}`;
+            const known = fieldTypes.get(key);
+            fieldTypes.set(key, known === undefined || known === d.type ? d.type : null);
         }
 
         const defs = scopes.filter((s) => s.kind !== "container");
@@ -267,7 +278,21 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
             }
             const declared = call.receiver ? declTypes.get(call.receiver) ?? undefined : undefined;
             const asType = !declared && call.receiver && /^[A-Z]\w*$/.test(call.receiver) ? call.receiver : undefined;
-            calls.push({ file: rel, from: caller?.id ?? rel, name: call.name, member: call.member, type: declared ?? asType, exact: !!asType });
+            const parts = call.receiver?.replace(/[!?]/g, "").split(".") ?? [];
+            let cls = caller;
+            while (cls && !CLASS_KINDS.has(cls.kind)) cls = parents.get(cls);
+            const head = parts.length > 1 && parts.every((p) => /^\w+$/.test(p))
+                ? parts[0] === "this" || parts[0] === "self" ? cls?.name : declTypes.get(parts[0]) ?? undefined
+                : undefined;
+            calls.push({
+                file: rel,
+                from: caller?.id ?? rel,
+                name: call.name,
+                member: call.member,
+                type: head ?? declared ?? asType,
+                path: head ? parts.slice(1) : [],
+                exact: !head && !!asType
+            });
         }
 
         for (const target of fileImports) edges.push({ source: rel, target, relation: "imports" });
@@ -287,8 +312,10 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
         const same = notSelf(defsByFile.get(call.file)?.get(call.name) ?? []);
         const imported = notSelf([...(imports.get(call.file) ?? [])].flatMap((f) => defsByFile.get(f)?.get(call.name) ?? []));
         const owner = (id: string) => id.split("::")[1].split(".").slice(-2, -1)[0];
-        if (call.type) {
-            const typed = notSelf(defsGlobal.get(call.name) ?? []).filter((id) => owner(id) === call.type);
+        let type = call.type;
+        for (const field of call.path) type = type ? fieldTypes.get(`${type}.${field}`) ?? undefined : undefined;
+        if (type) {
+            const typed = notSelf(defsGlobal.get(call.name) ?? []).filter((id) => owner(id) === type);
             const near = typed.filter((id) => [call.file, ...(imports.get(call.file) ?? [])].includes(id.split("::")[0]));
             const target = typed.length === 1 ? typed[0] : near.length === 1 ? near[0] : undefined;
             if (target) edges.push({ source: call.from, target, relation: "calls", confidence: call.exact ? "EXTRACTED" : "INFERRED" });

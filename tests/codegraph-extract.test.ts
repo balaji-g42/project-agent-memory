@@ -41,6 +41,8 @@ const EXPECTED_CALLS = [
     "t.dart::T.go -> t.dart::Other.run INFERRED",
     "t.dart::T.go -> t.dart::Box EXTRACTED",
     "t.dart::T.go -> t.dart::Box.run INFERRED",
+    "t.dart::U.go2 -> t.dart::Svc.run INFERRED",
+    "t.dart::U.go3 -> t.dart::Svc.run INFERRED",
     "t.kt::T.go -> t.kt::Svc.run INFERRED",
     "t.kt::T.go -> t.kt::Other.run INFERRED",
     "t.kt::T.go -> t.kt::Box EXTRACTED",

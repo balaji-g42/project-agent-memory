@@ -13,7 +13,7 @@ Every grammar the code indexer uses lives here as a `.wasm` file, loaded by web-
 | `tree-sitter-go.wasm` | Go | npm `tree-sitter-go@0.25.0` | copied unmodified | `LICENSE-tree-sitter-go` |
 | `tree-sitter-c_sharp.wasm` | C# | npm `tree-sitter-c-sharp@0.23.5` | copied unmodified | `LICENSE-tree-sitter-c-sharp` |
 | `tree-sitter-kotlin.wasm` | Kotlin | npm `@tree-sitter-grammars/tree-sitter-kotlin@1.1.0` | copied unmodified | `LICENSE-tree-sitter-kotlin` |
-| `tree-sitter-dart.wasm` | Dart | https://github.com/UserNobody14/tree-sitter-dart commit `0038280b774b65c1b89ba7fec50624d8baed9fe1` | built with tree-sitter-cli 0.27.1 | `LICENSE-tree-sitter-dart` |
+| `tree-sitter-dart.wasm` | Dart | https://github.com/nielsenko/tree-sitter-dart release `0.2.0` (commit `b57d734c84f510bbd524097902cab671e4dbfca9`) | built with tree-sitter-cli 0.27.1 | `LICENSE-tree-sitter-dart` |
 | `tree-sitter-swift.wasm` | Swift | https://github.com/alex-pinkus/tree-sitter-swift release `0.7.3` (commit `b8b22bffbb3441780e6471665bacfb263741c86a`) | release asset, unmodified | `LICENSE-tree-sitter-swift` |
 
 All licenses are MIT.
@@ -34,8 +34,8 @@ Dart, built (no admin rights, Emscripten or Docker needed; the CLI downloads was
 
 ```bash
 git init dart-src && cd dart-src
-git remote add origin https://github.com/UserNobody14/tree-sitter-dart
-git fetch --depth 1 origin 0038280b774b65c1b89ba7fec50624d8baed9fe1 && git checkout FETCH_HEAD
+git remote add origin https://github.com/nielsenko/tree-sitter-dart
+git fetch --depth 1 origin b57d734c84f510bbd524097902cab671e4dbfca9 && git checkout FETCH_HEAD
 cd .. && npx -y tree-sitter-cli@0.27.1 build --wasm dart-src -o tree-sitter-dart.wasm
 ```
 
