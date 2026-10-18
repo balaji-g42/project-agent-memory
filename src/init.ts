@@ -44,19 +44,19 @@ async function initMemoryBank(projectName: string): Promise<string> {
 
     // Check if collection exists
     const existingCollections = await client.getCollections();
-    let exists = existingCollections.collections.some((c: { name: string }) => c.name === collectionName);
+    const exists = existingCollections.collections.some((c: { name: string }) => c.name === collectionName);
 
     if (exists) {
         const info = await client.getCollection(collectionName);
         const currentSize = readVectorSize(info.config?.params);
         if (currentSize !== undefined && currentSize !== config.VECTOR_DIM) {
-            console.error(
-                `WARNING: collection ${collectionName} has vector size ${currentSize} but VECTOR_DIM=${config.VECTOR_DIM}. ` +
-                `Recreating the collection - all stored memories in it will be permanently deleted. ` +
-                `Set VECTOR_DIM=${currentSize} instead if you want to keep them.`
+            throw new Error(
+                `Collection ${collectionName} has vector size ${currentSize} but VECTOR_DIM=${config.VECTOR_DIM}. ` +
+                `Nothing was changed. To keep using it, set VECTOR_DIM=${currentSize} with the same ` +
+                `EMBEDDING_PROVIDER/EMBEDDING_MODEL that created it. To switch models, migrate the data first ` +
+                `(see "Migrating from memory-qdrant-mcp v2.x" in the README), or delete the collection yourself ` +
+                `with memory_admin op=delete_collection.`
             );
-            await client.deleteCollection(collectionName);
-            exists = false;
         }
     }
 

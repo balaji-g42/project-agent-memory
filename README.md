@@ -279,7 +279,7 @@ The package was renamed `memory-qdrant-mcp` → `project-agent-memory` at v3.0. 
 | `VECTOR_DIM` default `3072` | default `768` | **Read the warning below before you start the v3 server** |
 | *(none)* | `MEMORY_BACKEND` | Defaults to `qdrant`, so a v2 deployment needs no change |
 
-**`VECTOR_DIM` is the one that will bite you.** If your v2 collections were built at 3072 and you start v3 without setting `VECTOR_DIM`, the server sees 768 against a 3072 collection, warns on stderr, then **deletes and recreates that collection empty**. Either pin `VECTOR_DIM` (and `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`) to what v2 used, or accept the wipe and re-ingest. There is no in-place re-embedding path.
+**`VECTOR_DIM` is the one that will bite you.** If your v2 collections were built at 3072 and you start v3 without setting `VECTOR_DIM`, the server sees 768 against a 3072 collection and refuses every call on it with an error naming the stored size. Nothing is deleted. Either pin `VECTOR_DIM` (and `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`) to what v2 used, or delete the collection yourself with `memory_admin op=delete_collection` and re-ingest. There is no in-place re-embedding path.
 
 **3. Update the MCP registration.** The command changes in both deployment shapes.
 
@@ -410,7 +410,7 @@ Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens 
 
 `PREST_JWT_KEY` must be the same key pREST itself was started with. `QDRANT_URL`/`QDRANT_API_KEY` are ignored once `MEMORY_BACKEND=postgres`, so you can leave them in place during the cutover and remove them after.
 
-*e. Note the different failure mode.* On Qdrant a `VECTOR_DIM` mismatch silently wipes and recreates the collection. On Postgres the `vector(n)` column width is fixed at schema-creation time, so a mismatch throws a descriptive error and changes nothing - safer, but it means the `VECTOR_DIM` you migrate at is permanent for that database short of recreating the table.
+*e. Note the different failure mode.* On both backends a `VECTOR_DIM` mismatch throws a descriptive error and changes nothing. On Postgres the `vector(n)` column width is also fixed at schema-creation time, which means the `VECTOR_DIM` you migrate at is permanent for that database short of recreating the table.
 
 See [Migrating Qdrant data into Postgres](#migrating-qdrant-data-into-postgres) below for the script's dimension-handling details.
 
