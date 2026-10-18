@@ -4,7 +4,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "project-agent-memory": "dist/index.js",
+    "project-agent-memory": "dist/bin.js",
     "project-agent-memory-cli": "dist/cli.js"
   },
   "files": [
