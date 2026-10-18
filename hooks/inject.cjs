@@ -343,11 +343,22 @@ function statePath(file) {
   return path.join(STATE_DIR, `${STATE_PREFIX}${file}`);
 }
 
+function pamVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+    if (pkg.name === "project-agent-memory" && pkg.version) return pkg.version;
+  } catch {}
+  return setting(readConfigFile(), "PAM_VERSION");
+}
+
 function runCli(args, input, timeout) {
   const local = path.join(__dirname, "..", "dist", "cli.js");
-  const [command, prefix, shell] = fs.existsSync(local)
+  const hasLocal = fs.existsSync(local);
+  const version = hasLocal ? null : pamVersion();
+  if (!hasLocal && !version) return "";
+  const [command, prefix, shell] = hasLocal
     ? [process.execPath, [local], false]
-    : ["npx", ["-y", "-p", "project-agent-memory@latest", "project-agent-memory-cli"], process.platform === "win32"];
+    : ["npx", ["-y", "-p", `project-agent-memory@${version}`, "project-agent-memory-cli"], process.platform === "win32"];
   try {
     return execFileSync(command, [...prefix, ...args], {
       encoding: "utf8",

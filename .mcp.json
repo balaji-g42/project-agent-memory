@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "pam": {
-      "command": "npx",
-      "args": ["-y", "project-agent-memory@latest"]
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/server.cjs"]
     }
   }
 }
