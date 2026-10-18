@@ -12,6 +12,7 @@ const EMBED_BATCH = 64;
 const UPSERT_BATCH = 256;
 const MAX_QUERY_NODES = 40;
 const MAX_EDGES_SHOWN = 12;
+const MAX_SEED_EDGES_SHOWN = 40;
 const MAX_OUTPUT_CHARS = 6000;
 
 interface CodeEdge {
@@ -164,26 +165,34 @@ function location(node: CodeNode): string {
     return node.source_location ? `${node.source_file}:${node.source_location}` : node.source_file;
 }
 
-function renderEdges(edges: CodeEdge[], arrow: string, nodes: Map<string, CodeNode>): string[] {
-    const lines = edges.slice(0, MAX_EDGES_SHOWN).map((e) => {
+function renderEdges(edges: CodeEdge[], arrow: string, nodes: Map<string, CodeNode>, max: number): string[] {
+    const lines = edges.slice(0, max).map((e) => {
         const other = nodes.get(e.id);
         const name = other ? `${other.label} (${location(other)})` : e.id;
         return `  ${arrow.replace("%", e.relation)} ${name}`;
     });
-    if (edges.length > MAX_EDGES_SHOWN) lines.push(`  ... ${edges.length - MAX_EDGES_SHOWN} more`);
+    if (edges.length > max) lines.push(`  ... ${edges.length - max} more`);
     return lines;
 }
 
-function renderCodeGraph(seeds: string[], nodes: Map<string, CodeNode>): string {
+const TRUST_HEADER =
+    "Static code graph from a full tree-sitter parse of every source file in the repo. " +
+    "Edge lists are complete for statically resolvable calls and imports: <-calls- lines are all callers, -calls-> lines all callees. " +
+    "Answer from this directly; Read a file only to see code, and grep only for dynamic dispatch (reflection, string-keyed handlers).\n";
+
+function renderCodeGraph(seeds: string[], nodes: Map<string, CodeNode>, exact: boolean): string {
     const order = [...seeds, ...[...nodes.keys()].filter((id) => !seeds.includes(id))];
-    let out = "";
+    let out = exact ? TRUST_HEADER : TRUST_HEADER + "No symbol has exactly this name; * lines are the closest semantic matches.\n";
     for (const id of order) {
         const node = nodes.get(id);
         if (!node) continue;
+        const seed = seeds.includes(id);
+        const max = seed ? MAX_SEED_EDGES_SHOWN : MAX_EDGES_SHOWN;
+        const callers = node.in.filter((e) => e.relation === "calls").length;
         const block = [
-            `${seeds.includes(id) ? "*" : "-"} ${node.label}  ${location(node)}`,
-            ...renderEdges(node.out, "-%->", nodes),
-            ...renderEdges(node.in, "<-%-", nodes)
+            `${seed ? "*" : "-"} ${node.label}  ${location(node)}${seed ? `  (${callers} caller${callers === 1 ? "" : "s"})` : ""}`,
+            ...renderEdges(node.out, "-%->", nodes, max),
+            ...renderEdges(node.in, "<-%-", nodes, max)
         ].join("\n") + "\n";
         if (out.length + block.length > MAX_OUTPUT_CHARS) {
             out += `... output truncated at ${MAX_OUTPUT_CHARS} chars; narrow the query or lower depth\n`;
@@ -191,7 +200,7 @@ function renderCodeGraph(seeds: string[], nodes: Map<string, CodeNode>): string 
         }
         out += block;
     }
-    return out || "No matching code nodes.";
+    return seeds.length ? out : "No matching code nodes.";
 }
 
 async function queryCodeGraph(
@@ -220,7 +229,8 @@ async function queryCodeGraph(
 
     const nodes = new Map<string, CodeNode>();
     const seeds: string[] = [];
-    for (const p of [...byName.points, ...byVector.points]) {
+    const exact = byName.points.length > 0;
+    for (const p of exact ? byName.points : byVector.points) {
         const node = p.payload?.metadata as CodeNode | undefined;
         if (!node || nodes.has(node.node_id)) continue;
         nodes.set(node.node_id, node);
@@ -252,7 +262,7 @@ async function queryCodeGraph(
         }
     }
 
-    return renderCodeGraph(seeds, nodes);
+    return renderCodeGraph(seeds, nodes, exact);
 }
 
 async function searchCodeNodes(projectName: string, query: string, limit: number = 3): Promise<Array<{ score: number; label: string; location: string }>> {
