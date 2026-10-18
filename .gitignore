@@ -105,3 +105,6 @@ Thumbs.db
 .augment/rules/byterover-rules.md
 /.github/copilot-instructions.md
 .roo/mcp.json
+
+# Playwright MCP snapshots and screenshots
+.playwright-mcp/
