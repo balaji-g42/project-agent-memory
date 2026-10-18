@@ -1,15 +1,10 @@
-import { execFile } from "child_process";
 import { createHash } from "crypto";
-import { readFile } from "fs/promises";
-import { tmpdir } from "os";
-import { isAbsolute, join, relative, resolve } from "path";
-import { promisify } from "util";
+import { isAbsolute, relative, resolve } from "path";
 import { v5 as uuidv5 } from "uuid";
 import config from "../config.js";
 import { client } from "../init.js";
 import { embedTexts } from "../embeddings.js";
-
-const execFileAsync = promisify(execFile);
+import { extractCodeGraph } from "../codegraph/extract.js";
 
 const CODE_NODE_NAMESPACE = "3c1e8f2a-7b4d-5e6f-9a0b-1c2d3e4f5a6b";
 const MAX_CODE_NODES = 100000;
@@ -47,10 +42,6 @@ function codeCollection(projectName: string): string {
 
 function codePointId(projectName: string, nodeId: string): string {
     return uuidv5(`${projectName}:${nodeId}`, CODE_NODE_NAMESPACE);
-}
-
-function graphifyOutDir(projectName: string): string {
-    return join(tmpdir(), "project-agent-memory", "graphify", projectName.replace(/[^\w.-]/g, "_"));
 }
 
 async function ensureCodeCollection(projectName: string): Promise<string> {
@@ -112,26 +103,9 @@ function embedText(node: CodeNode): string {
     return `${node.label} ${node.source_file}`.trim();
 }
 
-async function runGraphify(root: string, outDir: string): Promise<any> {
-    try {
-        await execFileAsync(
-            "graphify",
-            ["extract", root, "--code-only", "--no-cluster", "--out", outDir],
-            { maxBuffer: 64 * 1024 * 1024, windowsHide: true }
-        );
-    } catch (error) {
-        const err = error as NodeJS.ErrnoException & { stderr?: string };
-        if (err.code === "ENOENT") {
-            throw new Error("graphify is not installed. Install it with: pipx install graphifyy");
-        }
-        throw new Error(`graphify extract failed: ${(err.stderr || err.message || "").slice(-2000)}`);
-    }
-    return JSON.parse(await readFile(join(outDir, "graphify-out", "graph.json"), "utf-8"));
-}
-
 async function indexCodeGraph(projectName: string, rootDir: string): Promise<IndexResult> {
     const root = resolve(rootDir);
-    const graph = await runGraphify(root, graphifyOutDir(projectName));
+    const graph = await extractCodeGraph(root);
     const nodes = parseGraph(graph, root);
     const collectionName = await ensureCodeCollection(projectName);
 

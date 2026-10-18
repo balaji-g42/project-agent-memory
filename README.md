@@ -271,11 +271,9 @@ Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-RE
 
 ### code_graph
 Code index graph, stored in its own `code_graph_<project_name>` collection, separate from the memory bank. `project_name`, `op`:
-- `index` - optional `root` (default: the server's working directory). Runs `graphify extract <root> --code-only --no-cluster` with its output in the OS temp dir, so nothing is written into the repo. It re-embeds only the nodes whose label, location or edges changed and deletes stale ones. Returns `{ nodes, upserted, deleted }`.
+- `index` - optional `root` (default: the server's working directory). Parses the repo in-process with the bundled tree-sitter grammars (TS/TSX, JS, Python, Java, Rust, Go, C#, Kotlin, Dart, Swift) and writes nothing into the repo. It re-embeds only the nodes whose label, location or edges changed and deletes stale ones. Returns `{ nodes, upserted, deleted }`.
 - `query` - `query`, `depth` (0-3, default 1), `limit` (1-20, default 5), optional `relation`. Seeds come from a semantic search plus an exact label match, followed by a walk over the callers and callees stored on each node. Returns text, with `*` marking a seed and `-` marking a neighbour, and `-calls->` / `<-calls-` for edges.
 - `stats` - returns `{ indexed, nodes }`.
-
-Requires [graphify](https://pypi.org/project/graphifyy/) on `PATH`: `pipx install graphifyy`.
 
 Plugin hooks built on it:
 - `SessionStart` loads the context and reports the code-graph status.

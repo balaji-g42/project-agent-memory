@@ -232,7 +232,7 @@ server.registerTool('memory_admin', {
 });
 
 server.registerTool('code_graph', {
-    description: "Code structure graph built from the repo's AST (functions, classes, imports, calls). Prefer op=query over grepping to find where a symbol lives, what calls it and what it depends on. op=query matches the text semantically and by exact name, then walks call/import edges up to depth hops. op=index (re)builds the graph incrementally from root using graphify; op=stats reports whether it is indexed.",
+    description: "Code structure graph built from the repo's AST (functions, classes, imports, calls). Prefer op=query over grepping to find where a symbol lives, what calls it and what it depends on. op=query matches the text semantically and by exact name, then walks call/import edges up to depth hops. op=index (re)builds the graph incrementally from root with the built-in tree-sitter extractor; op=stats reports whether it is indexed.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
         op: z.enum(["query", "index", "stats"]).describe("Code graph operation"),

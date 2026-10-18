@@ -18,6 +18,8 @@ Every grammar the code indexer uses lives here as a `.wasm` file, loaded by web-
 
 All licenses are MIT.
 
+The extractor queries in `src/codegraph/queries/` are adapted from each grammar's upstream `queries/tags.scm` (same sources and licenses as above), with import patterns added. Kotlin and Swift queries are written for this project.
+
 Do not use `tree-sitter-wasms@0.1.13` or npm `tree-sitter-dart@1.0.0`: their `.wasm` files use the old dynamic-linking format, which web-tree-sitter 0.27 refuses in `getDylinkMetadata`. npm `tree-sitter-swift@0.7.1` ships no `.wasm`.
 
 ## Refresh
