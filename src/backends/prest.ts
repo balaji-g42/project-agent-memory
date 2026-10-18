@@ -22,6 +22,31 @@ function authHeader(): Record<string, string> {
     return { Authorization: `Bearer ${token}` };
 }
 
+const MAX_PARAM_CHARS = 6000;
+const CHUNK_SQL = `substr({{sqlVal "chunk"}}::text, 2, length({{sqlVal "chunk"}}::text) - 2)`;
+
+function encodedLength(text: string): number {
+    return new URLSearchParams({ v: text }).toString().length - 2;
+}
+
+function splitForUrl(text: string, max: number): string[] {
+    const chunks: string[] = [];
+    let chunk = "";
+    let size = 0;
+    for (const ch of text) {
+        const n = encodedLength(ch);
+        if (size + n > max && chunk) {
+            chunks.push(chunk);
+            chunk = "";
+            size = 0;
+        }
+        chunk += ch;
+        size += n;
+    }
+    if (chunk) chunks.push(chunk);
+    return chunks;
+}
+
 function buildParams(params: Record<string, string | number | string[] | undefined>): URLSearchParams {
     const qs = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -238,6 +263,29 @@ class PrestVectorClient implements VectorClient {
         );
         await registerPrestQuery(
             "memory",
+            "upsert_point_chunk_start",
+            "SELECT 1",
+            `INSERT INTO memory_points (collection, id, payload, embedding)
+             VALUES ({{sqlVal "collection"}}, {{sqlVal "id"}}, jsonb_build_object('_chunked', ${CHUNK_SQL}), ('[' || replace({{sqlVal "header.X-Vector"}}, ' ', ',') || ']')::vector)
+             ON CONFLICT (collection, id) DO UPDATE
+             SET payload = EXCLUDED.payload, embedding = EXCLUDED.embedding, updated_at = now()`
+        );
+        await registerPrestQuery(
+            "memory",
+            "append_point_chunk",
+            "SELECT 1",
+            `UPDATE memory_points SET payload = jsonb_build_object('_chunked', (payload->>'_chunked') || ${CHUNK_SQL})
+             WHERE collection = {{sqlVal "collection"}} AND id = {{sqlVal "id"}} AND payload->>'_chunked' IS NOT NULL`
+        );
+        await registerPrestQuery(
+            "memory",
+            "finish_point_chunks",
+            "SELECT 1",
+            `UPDATE memory_points SET payload = (payload->>'_chunked')::jsonb, updated_at = now()
+             WHERE collection = {{sqlVal "collection"}} AND id = {{sqlVal "id"}} AND payload->>'_chunked' IS NOT NULL`
+        );
+        await registerPrestQuery(
+            "memory",
             "delete_points",
             "SELECT 1",
             `DELETE FROM memory_points WHERE collection = {{sqlVal "collection"}} AND id IN {{sqlList "ids"}}`
@@ -286,11 +334,19 @@ class PrestVectorClient implements VectorClient {
     async upsert(name: string, options: { wait?: boolean; points: Point[] }): Promise<any> {
         await this.ensureSchema();
         for (const point of options.points) {
-            await execWrite("memory", "upsert_point", {
-                collection: name,
-                id: String(point.id),
-                payload: JSON.stringify(point.payload ?? {})
-            }, { "X-Vector": toVectorHeaderValue(point.vector) });
+            const key = { collection: name, id: String(point.id) };
+            const vector = { "X-Vector": toVectorHeaderValue(point.vector) };
+            const payload = JSON.stringify(point.payload ?? {});
+            if (encodedLength(payload) <= MAX_PARAM_CHARS) {
+                await execWrite("memory", "upsert_point", { ...key, payload }, vector);
+                continue;
+            }
+            const [first, ...rest] = splitForUrl(payload, MAX_PARAM_CHARS);
+            await execWrite("memory", "upsert_point_chunk_start", { ...key, chunk: `x${first}x` }, vector);
+            for (const chunk of rest) {
+                await execWrite("memory", "append_point_chunk", { ...key, chunk: `x${chunk}x` });
+            }
+            await execWrite("memory", "finish_point_chunks", key);
         }
         return { status: "completed" };
     }
