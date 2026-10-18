@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 const { spawn } = require("child_process");
+const os = require("os");
 const path = require("path");
 
-const { version } = require(path.join(__dirname, "..", "package.json"));
+const { publishedVersion: version } = require(path.join(__dirname, "..", "package.json"));
 const child = spawn("npx", ["-y", `project-agent-memory@${version}`], {
+  cwd: os.homedir(),
   stdio: "inherit",
   shell: process.platform === "win32",
   windowsHide: true,

@@ -346,7 +346,7 @@ function statePath(file) {
 function pamVersion() {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
-    if (pkg.name === "project-agent-memory" && pkg.version) return pkg.version;
+    if (pkg.name === "project-agent-memory" && pkg.publishedVersion) return pkg.publishedVersion;
   } catch {}
   return setting(readConfigFile(), "PAM_VERSION");
 }
@@ -364,6 +364,7 @@ function runCli(args, input, timeout) {
       encoding: "utf8",
       input: input || "",
       timeout,
+      cwd: hasLocal ? undefined : os.homedir(),
       shell,
       windowsHide: true,
       stdio: ["pipe", "pipe", "ignore"],
