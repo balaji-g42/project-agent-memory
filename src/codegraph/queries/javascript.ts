@@ -8,7 +8,8 @@ export const base = `
 (program (lexical_declaration (variable_declarator name: (identifier) @name value: (call_expression)) @definition.function))
 (program (export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: (call_expression)) @definition.function)))
 (call_expression function: (identifier) @name) @call
-(call_expression function: (member_expression property: (property_identifier) @name)) @call.member
+(call_expression function: (member_expression object: (_) @receiver property: (property_identifier) @name)) @call.member
+(variable_declarator name: (identifier) @decl.name value: (new_expression constructor: (identifier) @decl.type))
 (new_expression constructor: (identifier) @name) @call
 (import_statement source: (string (string_fragment) @source))
 (export_statement source: (string (string_fragment) @source))

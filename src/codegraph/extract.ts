@@ -43,6 +43,8 @@ interface PendingCall {
     from: string;
     name: string;
     member: boolean;
+    type?: string;
+    exact: boolean;
 }
 
 let parserReady: Promise<void> | undefined;
@@ -155,7 +157,6 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
     const defsByFile = new Map<string, Map<string, string[]>>();
     const defsGlobal = new Map<string, Set<string>>();
     const methods = new Set<string>();
-    const typeWords = new Map<string, Set<string>>();
     parserReady ??= Parser.init();
     await parserReady;
     const parser = new Parser();
@@ -170,7 +171,6 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
             continue;
         }
         parser.setLanguage(language);
-        typeWords.set(rel, new Set(source.match(/\b[A-Z]\w*/g) ?? []));
         const tree = parser.parse(source);
         if (!tree) continue;
 
@@ -179,10 +179,18 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
         const scopes: Scope[] = [];
         const seen = new Set<number>();
         const fileImports = new Set<string>();
-        const fileCalls: { node: Node; name: string; member: boolean }[] = [];
+        const fileCalls: { node: Node; name: string; member: boolean; receiver?: string }[] = [];
+        const declTypes = new Map<string, string | null>();
 
         for (const match of query.matches(tree.rootNode)) {
             const cap = new Map(match.captures.map((c) => [c.name, c.node]));
+            const declName = cap.get("decl.name")?.text;
+            const declType = cap.get("decl.type")?.text;
+            if (declName && declType) {
+                const known = declTypes.get(declName);
+                declTypes.set(declName, known === undefined || known === declType ? declType : null);
+                continue;
+            }
             const name = cap.get("name")?.text;
             const sourceNode = cap.get("source");
             if (sourceNode) {
@@ -193,7 +201,7 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
             if (!name) continue;
             const callNode = cap.get("call") ?? cap.get("call.member");
             if (callNode) {
-                fileCalls.push({ node: callNode, name, member: cap.has("call.member") });
+                fileCalls.push({ node: callNode, name, member: cap.has("call.member"), receiver: cap.get("receiver")?.text });
                 continue;
             }
             const defCapture = match.captures.find((c) => c.name.startsWith("definition.") || c.name === "container");
@@ -256,7 +264,9 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
             for (const s of defs) {
                 if (s.start <= pos && pos < s.end && (!caller || s.start >= caller.start)) caller = s;
             }
-            calls.push({ file: rel, from: caller?.id ?? rel, name: call.name, member: call.member });
+            const declared = call.receiver ? declTypes.get(call.receiver) ?? undefined : undefined;
+            const asType = !declared && call.receiver && /^[A-Z]\w*$/.test(call.receiver) ? call.receiver : undefined;
+            calls.push({ file: rel, from: caller?.id ?? rel, name: call.name, member: call.member, type: declared ?? asType, exact: !!asType });
         }
 
         for (const target of fileImports) edges.push({ source: rel, target, relation: "imports" });
@@ -275,12 +285,15 @@ export async function extractCodeGraph(root: string): Promise<{ nodes: GraphNode
         const notSelf = (ids: Iterable<string>) => [...ids].filter((id) => id !== call.from);
         const same = notSelf(defsByFile.get(call.file)?.get(call.name) ?? []);
         const imported = notSelf([...(imports.get(call.file) ?? [])].flatMap((f) => defsByFile.get(f)?.get(call.name) ?? []));
-        const words = typeWords.get(call.file);
-        const global = notSelf(defsGlobal.get(call.name) ?? []).filter((id) => {
-            if (!call.member) return true;
-            const owner = id.split("::")[1].split(".").slice(-2, -1)[0];
-            return !owner || !!words?.has(owner);
-        });
+        const owner = (id: string) => id.split("::")[1].split(".").slice(-2, -1)[0];
+        if (call.type) {
+            const typed = notSelf(defsGlobal.get(call.name) ?? []).filter((id) => owner(id) === call.type);
+            if (typed.length === 1) {
+                edges.push({ source: call.from, target: typed[0], relation: "calls", confidence: call.exact ? "EXTRACTED" : "INFERRED" });
+            }
+            continue;
+        }
+        const global = notSelf(defsGlobal.get(call.name) ?? []).filter((id) => (call.member ? !owner(id) : !methods.has(id)));
         const target = same.length ? pick(same) : imported.length ? pick(imported) : pick(global);
         const confidence = same.length || imported.length ? "EXTRACTED" : "INFERRED";
         if (target) edges.push({ source: call.from, target, relation: "calls", confidence });
