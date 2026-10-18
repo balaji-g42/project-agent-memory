@@ -21,9 +21,33 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 
 ## Install
 
-Three ways in, most to least automated. All of them still need a reachable Qdrant or Postgres - see [Setup](#setup) below.
+### One command (recommended)
 
-### 1. Claude Code plugin (recommended)
+```bash
+npx -y project-agent-memory@3.1.1 setup
+```
+
+It asks for anything not given as a flag, then:
+
+- finds an existing install (`pam`, legacy `memory` or `memory-qdrant-mcp` in `~/.claude.json`, old plugin options, or `~/mcp/project-agent-memory/config.json`) and offers reuse (default), replace or abort; reuse imports its settings and re-registers it as `pam`
+- for a local target, starts Qdrant or pgvector from `~/mcp/project-agent-memory/stack/<backend>/` with Docker, generating the pgvector secrets on first run
+- writes `config.json`, checks the store is reachable, and stops without changing anything if an existing collection's vector size differs from `VECTOR_DIM` (Qdrant: offers a re-embed with backups, default no)
+- registers for the chosen mode, backing up `~/.claude.json` and `settings.json` first and only adding entries
+- verifies with a real round-trip on a throwaway project
+
+| Flag | Values |
+|---|---|
+| `--mode` | `plugin` (default), `mcp` (server + hooks + skill + `/memory-sync`), `skill` (server + skill), `vault` (Markdown vault, no server) |
+| `--backend` / `--target` | `qdrant` (default) or `pgvector` / `local` (default) or `cloud` |
+| `--qdrant-url`, `--qdrant-key` | Qdrant cloud |
+| `--prest-url`, `--prest-jwt-key`, `--prest-database`, `--prest-admin` | pgvector via pREST, cloud |
+| `--vault-path` | vault mode, default `~/.claude/vault` |
+| `--replace-memory` | replace an existing install instead of reusing it |
+| `--yes` | take every default, no prompts |
+
+The three options below are what setup does per mode, for doing it by hand. All of them need a reachable Qdrant or Postgres - see [Setup](#setup) below.
+
+### 1. Claude Code plugin
 
 Bundles the MCP server, the agent skill, and memory-first session hooks (detects `git commit`, nudges the agent to log it, hard-blocks `Stop` until it does) in one install.
 

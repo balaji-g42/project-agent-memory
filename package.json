@@ -11,6 +11,10 @@
   "files": [
     "dist/",
     "skill/",
+    "stack/",
+    "hooks/",
+    "commands/",
+    "vault/",
     "README.md",
     "LICENSE"
   ],
