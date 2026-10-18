@@ -24,7 +24,7 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 ### One command (recommended)
 
 ```bash
-npx -y project-agent-memory@3.1.1 setup
+npx -y project-agent-memory@3.1.2 setup
 ```
 
 It asks for anything not given as a flag, then:
