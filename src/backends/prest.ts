@@ -355,10 +355,10 @@ class PrestVectorClient implements VectorClient {
     async delete(name: string, options: { wait?: boolean; points: Array<string | number> }): Promise<any> {
         await this.ensureSchema();
         if (options.points.length === 0) return { status: "completed" };
-        await execWrite("memory", "delete_points", {
-            collection: name,
-            ids: options.points.map(String)
-        });
+        const ids = options.points.map(String);
+        for (let i = 0; i < ids.length; i += 100) {
+            await execWrite("memory", "delete_points", { collection: name, ids: ids.slice(i, i + 100) });
+        }
         return { status: "completed" };
     }
 }
