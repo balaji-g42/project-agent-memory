@@ -15,6 +15,7 @@
     "hooks/",
     "commands/",
     "vault/",
+    "grammars/",
     "README.md",
     "LICENSE"
   ],
