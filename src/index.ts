@@ -232,7 +232,8 @@ server.registerTool('memory_admin', {
 });
 
 server.registerTool('code_graph', {
-    description: "Code structure graph built from the repo's AST (functions, classes, imports, calls). Prefer op=query over grepping to find where a symbol lives, what calls it and what it depends on. op=query matches the text semantically and by exact name, then walks call/import edges up to depth hops. op=index (re)builds the graph incrementally from root using graphify; op=stats reports whether it is indexed.",
+    _meta: { "anthropic/alwaysLoad": true },
+    description: "Code structure graph built from a full tree-sitter parse of every source file in the repo (functions, classes, imports, calls). For any question about where a symbol lives, what calls it or what it calls, call op=query first and on its own, before Grep or Glob, and answer from its result directly: caller and callee lists are complete for statically resolvable calls, so do not re-verify them with grep or by reading files. Read a file only when you need the code itself. op=query matches by exact name first (falling back to semantic matches when no symbol has that name), then walks call/import edges up to depth hops. op=index (re)builds the graph incrementally from root with the built-in tree-sitter extractor; op=stats reports whether it is indexed.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
         op: z.enum(["query", "index", "stats"]).describe("Code graph operation"),

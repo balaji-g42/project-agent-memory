@@ -155,8 +155,8 @@ abstract class EmbeddingProviderBase {
 
     // Embedding-specific summarization with custom prompt
     async summarizeForEmbedding(text: string): Promise<string> {
-        const SUMMARIZER_MODEL = process.env.SUMMARIZER_MODEL || "openai/gpt-oss-20b:free";
-        const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || "";
+        const SUMMARIZER_MODEL = config.SUMMARIZER_MODEL;
+        const OPENROUTER_KEY = config.OPENROUTER_API_KEY;
 
         // Use OpenRouter if key exists
         if (OPENROUTER_KEY) {

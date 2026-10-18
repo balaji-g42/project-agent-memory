@@ -121,7 +121,7 @@ Long text is summarized before embedding when it exceeds the chunking threshold.
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -139,7 +139,7 @@ That is the whole minimum config: ONNX embeddings and `VECTOR_DIM=768` are the d
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -160,7 +160,7 @@ That is the whole minimum config: ONNX embeddings and `VECTOR_DIM=768` are the d
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "node",
       "args": ["D:/WorkFolder/project-agent-memory/dist/index.js"],
       "env": { "QDRANT_URL": "http://localhost:6333" }

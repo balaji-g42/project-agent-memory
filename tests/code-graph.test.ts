@@ -52,15 +52,23 @@ describe('renderCodeGraph', () => {
     it('lists seeds first with edges resolved to labels and locations', () => {
         const nodes = parseGraph(graph, ROOT);
         const map = new Map<string, CodeNode>(nodes.map(n => [n.node_id, n]));
-        const out = renderCodeGraph(['b'], map);
+        const out = renderCodeGraph(['b'], map, true);
         const lines = out.trim().split('\n');
-        expect(lines[0]).toBe('* loadConfig()  src/config.ts:L3');
+        expect(lines[0]).toMatch(/^Static code graph from a full tree-sitter parse/);
+        expect(lines[1]).toBe('* loadConfig()  src/config.ts:L3  (1 caller)');
         expect(out).toContain('  <-calls- main() (src/index.ts:L10)');
         expect(out).toContain('- main()  src/index.ts:L10');
         expect(out).toContain('  -calls-> loadConfig() (src/config.ts:L3)');
+        expect(out).not.toContain('closest semantic matches');
+    });
+
+    it('says when the seeds are only semantic matches', () => {
+        const nodes = parseGraph(graph, ROOT);
+        const map = new Map<string, CodeNode>(nodes.map(n => [n.node_id, n]));
+        expect(renderCodeGraph(['b'], map, false)).toContain('No symbol has exactly this name');
     });
 
     it('reports no matches for an empty result', () => {
-        expect(renderCodeGraph([], new Map())).toBe('No matching code nodes.');
+        expect(renderCodeGraph([], new Map(), true)).toBe('No matching code nodes.');
     });
 });

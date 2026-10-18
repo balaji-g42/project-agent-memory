@@ -21,9 +21,33 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 
 ## Install
 
-Three ways in, most to least automated. All of them still need a reachable Qdrant or Postgres - see [Setup](#setup) below.
+### One command (recommended)
 
-### 1. Claude Code plugin (recommended)
+```bash
+npx -y project-agent-memory@3.1.1 setup
+```
+
+It asks for anything not given as a flag, then:
+
+- finds an existing install (`pam`, legacy `memory` or `memory-qdrant-mcp` in `~/.claude.json`, old plugin options, or `~/mcp/project-agent-memory/config.json`) and offers reuse (default), replace or abort; reuse imports its settings and re-registers it as `pam`
+- for a local target, starts Qdrant or pgvector from `~/mcp/project-agent-memory/stack/<backend>/` with Docker, generating the pgvector secrets on first run
+- writes `config.json`, checks the store is reachable, and stops without changing anything if an existing collection's vector size differs from `VECTOR_DIM` (Qdrant: offers a re-embed with backups, default no)
+- registers for the chosen mode, backing up `~/.claude.json` and `settings.json` first and only adding entries
+- verifies with a real round-trip on a throwaway project
+
+| Flag | Values |
+|---|---|
+| `--mode` | `plugin` (default), `mcp` (server + hooks + skill + `/memory-sync`), `skill` (server + skill), `vault` (Markdown vault, no server) |
+| `--backend` / `--target` | `qdrant` (default) or `pgvector` / `local` (default) or `cloud` |
+| `--qdrant-url`, `--qdrant-key` | Qdrant cloud |
+| `--prest-url`, `--prest-jwt-key`, `--prest-database`, `--prest-admin` | pgvector via pREST, cloud |
+| `--vault-path` | vault mode, default `~/.claude/vault` |
+| `--replace-memory` | replace an existing install instead of reusing it |
+| `--yes` | take every default, no prompts |
+
+The three options below are what setup does per mode, for doing it by hand. All of them need a reachable Qdrant or Postgres - see [Setup](#setup) below.
+
+### 1. Claude Code plugin
 
 Bundles the MCP server, the agent skill, and memory-first session hooks (detects `git commit`, nudges the agent to log it, hard-blocks `Stop` until it does) in one install.
 
@@ -49,7 +73,7 @@ git clone https://github.com/balaji-g42/project-agent-memory
 claude --plugin-dir ./project-agent-memory
 ```
 
-On first enable, Claude Code prompts for `memory_backend` (`qdrant` or `postgres`) and the matching URL/key via the plugin's `userConfig` - nothing is hardcoded to Qdrant. Validate the manifest any time with `claude plugin validate .`.
+The server, the CLI and the hooks read their settings from `~/mcp/project-agent-memory/config.json` (keys match the environment variables below, e.g. `{"MEMORY_BACKEND": "qdrant", "QDRANT_URL": "...", "QDRANT_API_KEY": "..."}`). A non-empty environment variable overrides the file; defaults apply when neither is set. Validate the manifest any time with `claude plugin validate .`.
 
 Includes: `.mcp.json` (server registration), `skill/` (agent skill), `hooks/` (`SessionStart` / `PostToolUse` / `Stop`), `commands/memory-sync.md` (`/memory-sync`).
 
@@ -83,7 +107,7 @@ node dist/index.js
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -247,11 +271,9 @@ Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-RE
 
 ### code_graph
 Code index graph, stored in its own `code_graph_<project_name>` collection, separate from the memory bank. `project_name`, `op`:
-- `index` - optional `root` (default: the server's working directory). Runs `graphify extract <root> --code-only --no-cluster` with its output in the OS temp dir, so nothing is written into the repo. It re-embeds only the nodes whose label, location or edges changed and deletes stale ones. Returns `{ nodes, upserted, deleted }`.
+- `index` - optional `root` (default: the server's working directory). Parses the repo in-process with the bundled tree-sitter grammars (TS/TSX, JS, Python, Java, Rust, Go, C#, Kotlin, Dart, Swift) and writes nothing into the repo. It re-embeds only the nodes whose label, location or edges changed and deletes stale ones. Returns `{ nodes, upserted, deleted }`.
 - `query` - `query`, `depth` (0-3, default 1), `limit` (1-20, default 5), optional `relation`. Seeds come from a semantic search plus an exact label match, followed by a walk over the callers and callees stored on each node. Returns text, with `*` marking a seed and `-` marking a neighbour, and `-calls->` / `<-calls-` for edges.
 - `stats` - returns `{ indexed, nodes }`.
-
-Requires [graphify](https://pypi.org/project/graphifyy/) on `PATH`: `pipx install graphifyy`.
 
 Plugin hooks built on it:
 - `SessionStart` loads the context and reports the code-graph status.
@@ -279,7 +301,14 @@ The package was renamed `memory-qdrant-mcp` → `project-agent-memory` at v3.0. 
 | `VECTOR_DIM` default `3072` | default `768` | **Read the warning below before you start the v3 server** |
 | *(none)* | `MEMORY_BACKEND` | Defaults to `qdrant`, so a v2 deployment needs no change |
 
-**`VECTOR_DIM` is the one that will bite you.** If your v2 collections were built at 3072 and you start v3 without setting `VECTOR_DIM`, the server sees 768 against a 3072 collection, warns on stderr, then **deletes and recreates that collection empty**. Either pin `VECTOR_DIM` (and `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`) to what v2 used, or accept the wipe and re-ingest. There is no in-place re-embedding path.
+**`VECTOR_DIM` is the one that will bite you.** If your v2 collections were built at 3072 and you start v3 without setting `VECTOR_DIM`, the server sees 768 against a 3072 collection and refuses every call on it with an error naming the stored size. Nothing is deleted. Either pin `VECTOR_DIM` (and `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`) to what v2 used, or re-embed the collection in place with the v3 model:
+
+```bash
+npx -p project-agent-memory project-agent-memory-cli migrate <project_name> --dry-run
+npx -p project-agent-memory project-agent-memory-cli migrate <project_name>   # or --all
+```
+
+`migrate` copies the collection to `memory_bank_<project_name>_backup` and checks the count, then rebuilds `memory_bank_<project_name>` at the current `VECTOR_DIM`, re-embedding every point from its stored `content` with the current `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`. Ids and payloads are kept, and no v2 API key is needed. If it stops part way, run it again with `--resume`. The backup is kept; once you have checked the result, delete it with `memory_admin op=delete_collection project_name=<project_name>_backup`. Qdrant only. Restart the MCP server afterwards.
 
 **3. Update the MCP registration.** The command changes in both deployment shapes.
 
@@ -288,7 +317,7 @@ Local (embeddings computed on this machine, Qdrant on localhost):
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -307,7 +336,7 @@ Self-hosted / cloud Qdrant (remote instance, API key, embeddings still local):
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -338,7 +367,7 @@ On Windows, `"command": "npx"` may need to be `"command": "cmd", "args": ["/c", 
 | | Do this | Cost |
 |---|---|---|
 | **Keep v2's embeddings** | Set `VECTOR_DIM=3072` and the same `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL` v2 used, then migrate | v2's `fastembed` and `ollama` embedding providers don't exist in v3, so this only works if v2 used `openrouter` or `gemini` |
-| **Re-embed on v3 (recommended)** | Start clean on `onnx`/768 and re-ingest the content you care about | You lose v2 history you don't re-enter |
+| **Re-embed on v3 (recommended)** | Run `project-agent-memory-cli migrate` on Qdrant first (above), then copy with the script at `VECTOR_DIM=768` | One extra step |
 
 Migrating anyway and re-embedding later is possible - `memory_update` re-embeds the row it touches - but there is no bulk re-embed command.
 
@@ -361,7 +390,7 @@ Drop `--dry-run` once the reported counts look right. Use `--all` instead of `--
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -384,7 +413,7 @@ Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens 
 ```json
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": ["-y", "project-agent-memory"],
       "env": {
@@ -410,7 +439,7 @@ Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens 
 
 `PREST_JWT_KEY` must be the same key pREST itself was started with. `QDRANT_URL`/`QDRANT_API_KEY` are ignored once `MEMORY_BACKEND=postgres`, so you can leave them in place during the cutover and remove them after.
 
-*e. Note the different failure mode.* On Qdrant a `VECTOR_DIM` mismatch silently wipes and recreates the collection. On Postgres the `vector(n)` column width is fixed at schema-creation time, so a mismatch throws a descriptive error and changes nothing - safer, but it means the `VECTOR_DIM` you migrate at is permanent for that database short of recreating the table.
+*e. Note the different failure mode.* On both backends a `VECTOR_DIM` mismatch throws a descriptive error and changes nothing. On Postgres the `vector(n)` column width is also fixed at schema-creation time, which means the `VECTOR_DIM` you migrate at is permanent for that database short of recreating the table.
 
 See [Migrating Qdrant data into Postgres](#migrating-qdrant-data-into-postgres) below for the script's dimension-handling details.
 
@@ -476,7 +505,7 @@ project-agent-memory/
 ├── tests/
 ├── skill/                    # Claude Agent Skill, incl. the Qdrant->Postgres migration script
 ├── .claude-plugin/
-│   └── plugin.json           # Plugin manifest (name, userConfig, skill path)
+│   └── plugin.json           # Plugin manifest (name, skill path)
 ├── hooks/
 │   ├── hooks.json             # SessionStart / PostToolUse / Stop wiring
 │   └── inject.cjs             # Context injection, prompt recall, code-graph reindex, commit auto-logging + Stop hard-block

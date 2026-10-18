@@ -147,7 +147,7 @@ Edges are stored in the same collection as ordinary points with `type = "knowled
 
 The collection `memory_bank_<project_name>` is created on first use with `size = VECTOR_DIM` and the configured distance metric, and seeded with one placeholder point per memory type.
 
-On every call, if the existing collection's vector size does not match `VECTOR_DIM`, the server logs a warning to stderr, **deletes the collection**, and recreates it at the new size. Stored memories in that collection are lost. Set `VECTOR_DIM` back to the size named in the warning if you want to keep them.
+On every call, if the existing collection's vector size does not match `VECTOR_DIM`, the call fails with an error naming the stored size and nothing is changed. Set `VECTOR_DIM` back to that size to keep using the collection, or delete it with `memory_admin op=delete_collection` and start over.
 
 ---
 

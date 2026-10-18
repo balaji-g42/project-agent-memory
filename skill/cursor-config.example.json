@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "memory": {
+    "pam": {
       "command": "npx",
       "args": [
         "-y",
