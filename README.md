@@ -279,7 +279,14 @@ The package was renamed `memory-qdrant-mcp` → `project-agent-memory` at v3.0. 
 | `VECTOR_DIM` default `3072` | default `768` | **Read the warning below before you start the v3 server** |
 | *(none)* | `MEMORY_BACKEND` | Defaults to `qdrant`, so a v2 deployment needs no change |
 
-**`VECTOR_DIM` is the one that will bite you.** If your v2 collections were built at 3072 and you start v3 without setting `VECTOR_DIM`, the server sees 768 against a 3072 collection and refuses every call on it with an error naming the stored size. Nothing is deleted. Either pin `VECTOR_DIM` (and `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`) to what v2 used, or delete the collection yourself with `memory_admin op=delete_collection` and re-ingest. There is no in-place re-embedding path.
+**`VECTOR_DIM` is the one that will bite you.** If your v2 collections were built at 3072 and you start v3 without setting `VECTOR_DIM`, the server sees 768 against a 3072 collection and refuses every call on it with an error naming the stored size. Nothing is deleted. Either pin `VECTOR_DIM` (and `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`) to what v2 used, or re-embed the collection in place with the v3 model:
+
+```bash
+npx -p project-agent-memory project-agent-memory-cli migrate <project_name> --dry-run
+npx -p project-agent-memory project-agent-memory-cli migrate <project_name>   # or --all
+```
+
+`migrate` copies the collection to `memory_bank_<project_name>_backup` and checks the count, then rebuilds `memory_bank_<project_name>` at the current `VECTOR_DIM`, re-embedding every point from its stored `content` with the current `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`. Ids and payloads are kept, and no v2 API key is needed. If it stops part way, run it again with `--resume`. The backup is kept; once you have checked the result, delete it with `memory_admin op=delete_collection project_name=<project_name>_backup`. Qdrant only. Restart the MCP server afterwards.
 
 **3. Update the MCP registration.** The command changes in both deployment shapes.
 
@@ -338,7 +345,7 @@ On Windows, `"command": "npx"` may need to be `"command": "cmd", "args": ["/c", 
 | | Do this | Cost |
 |---|---|---|
 | **Keep v2's embeddings** | Set `VECTOR_DIM=3072` and the same `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL` v2 used, then migrate | v2's `fastembed` and `ollama` embedding providers don't exist in v3, so this only works if v2 used `openrouter` or `gemini` |
-| **Re-embed on v3 (recommended)** | Start clean on `onnx`/768 and re-ingest the content you care about | You lose v2 history you don't re-enter |
+| **Re-embed on v3 (recommended)** | Run `project-agent-memory-cli migrate` on Qdrant first (above), then copy with the script at `VECTOR_DIM=768` | One extra step |
 
 Migrating anyway and re-embedding later is possible - `memory_update` re-embeds the row it touches - but there is no bulk re-embed command.
 
