@@ -2,7 +2,7 @@
   "mcpServers": {
     "pam": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory"],
+      "args": ["-y", "project-agent-memory@3.1.2"],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
         "QDRANT_API_KEY": "",
