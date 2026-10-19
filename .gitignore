@@ -1,6 +1,9 @@
 
 # Dependencies
 node_modules/
+
+# Tree-sitter grammars: release asset grammars-v1, fetched by bin/fetch-grammars.cjs on npm pack
+grammars/*.wasm
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
