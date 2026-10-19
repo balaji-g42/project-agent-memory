@@ -123,7 +123,7 @@ Long text is summarized before embedding when it exceeds the chunking threshold.
   "mcpServers": {
     "pam": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.1.2"],
+      "args": ["-y", "project-agent-memory@3.1.3"],
       "env": {
         "QDRANT_URL": "http://localhost:6333"
       }
@@ -141,7 +141,7 @@ That is the whole minimum config: ONNX embeddings and `VECTOR_DIM=768` are the d
   "mcpServers": {
     "pam": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.1.2"],
+      "args": ["-y", "project-agent-memory@3.1.3"],
       "env": {
         "QDRANT_URL": "https://your-cluster.qdrant.io",
         "QDRANT_API_KEY": "your_key",
