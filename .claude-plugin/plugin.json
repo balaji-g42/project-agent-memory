@@ -8,5 +8,11 @@
   "repository": "https://github.com/balaji-g42/project-agent-memory",
   "license": "MIT",
   "keywords": ["memory", "mcp", "qdrant", "pgvector", "context"],
-  "skills": "./skill/"
+  "skills": "./skill/",
+  "mcpServers": {
+    "pam": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/server.cjs"]
+    }
+  }
 }
