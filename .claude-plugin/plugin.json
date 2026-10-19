@@ -7,7 +7,12 @@
   "homepage": "https://github.com/balaji-g42/project-agent-memory",
   "repository": "https://github.com/balaji-g42/project-agent-memory",
   "license": "MIT",
+  "documentationUrl": "https://github.com/balaji-g42/project-agent-memory/blob/master/README.md",
+  "supportUrl": "https://github.com/balaji-g42/project-agent-memory/issues",
+  "privacyPolicyUrl": "https://github.com/balaji-g42/project-agent-memory/blob/master/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/balaji-g42/project-agent-memory/blob/master/LICENSE",
   "keywords": ["memory", "mcp", "qdrant", "pgvector", "context"],
+  "icon": "./assets/icon.png",
   "skills": "./skill/",
   "mcpServers": {
     "pam": {

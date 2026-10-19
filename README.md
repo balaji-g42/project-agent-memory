@@ -109,7 +109,7 @@ node dist/index.js
   "mcpServers": {
     "pam": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory"],
+      "args": ["-y", "project-agent-memory@3.1.2"],
       "env": {
         "QDRANT_URL": "http://localhost:6333"
       }
@@ -319,7 +319,7 @@ Local (embeddings computed on this machine, Qdrant on localhost):
   "mcpServers": {
     "pam": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory"],
+      "args": ["-y", "project-agent-memory@3.1.2"],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
         "VECTOR_DIM": "768",
@@ -338,7 +338,7 @@ Self-hosted / cloud Qdrant (remote instance, API key, embeddings still local):
   "mcpServers": {
     "pam": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory"],
+      "args": ["-y", "project-agent-memory@3.1.2"],
       "env": {
         "MEMORY_BACKEND": "qdrant",
         "QDRANT_URL": "https://qdrant.example.com",
@@ -392,7 +392,7 @@ Drop `--dry-run` once the reported counts look right. Use `--all` instead of `--
   "mcpServers": {
     "pam": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory"],
+      "args": ["-y", "project-agent-memory@3.1.2"],
       "env": {
         "MEMORY_BACKEND": "postgres",
         "PREST_URL": "http://localhost:3000",
@@ -415,7 +415,7 @@ Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens 
   "mcpServers": {
     "pam": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory"],
+      "args": ["-y", "project-agent-memory@3.1.2"],
       "env": {
         "MEMORY_BACKEND": "postgres",
         "PREST_URL": "https://prest.example.com",
