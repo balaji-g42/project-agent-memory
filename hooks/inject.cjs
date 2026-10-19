@@ -19,6 +19,7 @@ const COMMIT_WINDOW_S = 120;
 const CONFIG_FILE = path.join(os.homedir(), "mcp", "project-agent-memory", "config.json");
 const MEMORY_TOOLS = /^mcp__(plugin_project-agent-memory_)?pam__memory_(create|update)$/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+const CODE_GRAPH_TOOL = /^mcp__(plugin_project-agent-memory_)?pam__code_graph$/;
 
 function readConfigFile() {
   try {
@@ -420,18 +421,35 @@ function onUserPromptSubmit(payload) {
 
 function onPreToolUse(payload) {
   if (isVault()) return "";
-  const stats = readCodeStats(projectName(payload.cwd || process.cwd()));
-  if (!stats || !stats.indexed) return "";
-  const nudged = statePath(`nudged-${safeName(payload.session_id || "default")}`);
-  if (fs.existsSync(nudged)) return "";
-  try {
-    fs.writeFileSync(nudged, "", "utf8");
-  } catch {}
-  return (
-    `The code graph is indexed (${stats.nodes} nodes). For finding a symbol, its callers or ` +
-    "its dependencies, code_graph op=query is cheaper than Grep/Glob. Grep is fine for literal " +
-    "strings, config values and non-code files."
-  );
+  if (fs.existsSync(codeGraphUsedPath(payload))) return "";
+  const name = projectName(payload.cwd || process.cwd());
+  const stats = readCodeStats(name);
+  if (!stats || !stats.indexed) {
+    const nudged = statePath(`nudged-${safeName(payload.session_id || "default")}`);
+    if (fs.existsSync(nudged)) return "";
+    try {
+      fs.mkdirSync(STATE_DIR, { recursive: true });
+      fs.writeFileSync(nudged, "", "utf8");
+    } catch {}
+    return (
+      `The code graph for ${name} is not indexed. Run code_graph op=index now; Grep/Glob are ` +
+      "allowed until it finishes, then code_graph op=query comes first."
+    );
+  }
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason:
+        "Call code_graph op=query first (op=index if it reports not indexed). Grep/Glob unlock " +
+        "for the rest of this session after a code_graph op=query; then use them for literal " +
+        "strings, config values and non-code files.",
+    },
+  };
+}
+
+function codeGraphUsedPath(payload) {
+  return statePath(`codegraph-used-${safeName(payload.session_id || "default")}`);
 }
 
 function reindex(name, cwd) {
@@ -478,6 +496,15 @@ function onPostToolUse(payload) {
   const tool = payload.tool_name || "";
   const input = payload.tool_input || {};
   const vault = isVault();
+
+  if (CODE_GRAPH_TOOL.test(tool)) {
+    try {
+      fs.mkdirSync(STATE_DIR, { recursive: true });
+      if (input.op === "query") fs.writeFileSync(codeGraphUsedPath(payload), "", "utf8");
+    } catch {}
+    if (input.op === "index" && input.project_name) writeCodeStats(input.project_name, { indexed: true });
+    return "";
+  }
 
   if (EDIT_TOOLS.has(tool) && vault) {
     if (isVaultPath(input.file_path || input.notebook_path || "")) clearSentinel(payload);
