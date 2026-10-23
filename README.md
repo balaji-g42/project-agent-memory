@@ -29,7 +29,7 @@ npx -y project-agent-memory@3.1.3 setup
 
 It asks for anything not given as a flag, then:
 
-- finds an existing install (`pam`, legacy `memory` or `memory-qdrant-mcp` in `~/.claude.json`, old plugin options, or `~/mcp/project-agent-memory/config.json`) and offers reuse (default), replace or abort; reuse imports its settings and re-registers it as `pam`
+- finds an existing install (`mem`, legacy `pam`, `memory` or `memory-qdrant-mcp` in `~/.claude.json`, old plugin options, or `~/mcp/project-agent-memory/config.json`) and offers reuse (default), replace or abort; reuse imports its settings and re-registers it as `mem`
 - for a local target, starts Qdrant or pgvector from `~/mcp/project-agent-memory/stack/<backend>/` with Docker, generating the pgvector secrets on first run
 - writes `config.json`, checks the store is reachable, and stops without changing anything if an existing collection's vector size differs from `VECTOR_DIM` (Qdrant: offers a re-embed with backups, default no)
 - registers for the chosen mode, backing up `~/.claude.json` and `settings.json` first and only adding entries
@@ -55,7 +55,7 @@ The repo is its own marketplace (`balaji-g42`). Inside Claude Code:
 
 ```text
 /plugin marketplace add balaji-g42/project-agent-memory
-/plugin install project-agent-memory@balaji-g42
+/plugin install pam@balaji-g42
 ```
 
 Updates: third-party marketplaces do not auto-update by default. Turn it on once with `/plugin marketplace configure balaji-g42`, or in `settings.json`:
@@ -64,7 +64,7 @@ Updates: third-party marketplaces do not auto-update by default. Turn it on once
 { "pluginMarketplaceSettings": { "balaji-g42": { "autoUpdate": true } } }
 ```
 
-Or update by hand with `/plugin marketplace update balaji-g42` then `/plugin update project-agent-memory@balaji-g42`. A new plugin version is only seen when `version` in `.claude-plugin/plugin.json` changes, so bump it on every release.
+Or update by hand with `/plugin marketplace update balaji-g42` then `/plugin update pam@balaji-g42`. A new plugin version is only seen when `version` in `.claude-plugin/plugin.json` changes, so bump it on every release.
 
 For local development, load a checkout directly:
 
@@ -107,7 +107,7 @@ node dist/index.js
 ```json
 {
   "mcpServers": {
-    "pam": {
+    "mem": {
       "command": "npx",
       "args": ["-y", "project-agent-memory@3.1.3"],
       "env": {
@@ -317,7 +317,7 @@ Local (embeddings computed on this machine, Qdrant on localhost):
 ```json
 {
   "mcpServers": {
-    "pam": {
+    "mem": {
       "command": "npx",
       "args": ["-y", "project-agent-memory@3.1.3"],
       "env": {
@@ -336,7 +336,7 @@ Self-hosted / cloud Qdrant (remote instance, API key, embeddings still local):
 ```json
 {
   "mcpServers": {
-    "pam": {
+    "mem": {
       "command": "npx",
       "args": ["-y", "project-agent-memory@3.1.3"],
       "env": {
@@ -390,7 +390,7 @@ Drop `--dry-run` once the reported counts look right. Use `--all` instead of `--
 ```json
 {
   "mcpServers": {
-    "pam": {
+    "mem": {
       "command": "npx",
       "args": ["-y", "project-agent-memory@3.1.3"],
       "env": {
@@ -413,7 +413,7 @@ Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens 
 ```json
 {
   "mcpServers": {
-    "pam": {
+    "mem": {
       "command": "npx",
       "args": ["-y", "project-agent-memory@3.1.3"],
       "env": {

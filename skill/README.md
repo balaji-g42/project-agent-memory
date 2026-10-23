@@ -76,7 +76,7 @@ Minimum config - the server runs via `npx`, embeds locally with ONNX, and needs 
 ```json
 {
   "mcpServers": {
-    "pam": {
+    "mem": {
       "command": "npx",
       "args": ["-y", "project-agent-memory@3.1.3"],
       "env": { "QDRANT_URL": "http://localhost:6333" }
