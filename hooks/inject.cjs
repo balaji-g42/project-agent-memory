@@ -49,7 +49,7 @@ function hostOf(url) {
 function memorySetup() {
   const file = readConfigFile();
   const mode = (setting(file, "MODE") || (process.env.CLAUDE_PLUGIN_ROOT ? "plugin" : "mcp")).toLowerCase();
-  const prefix = mode === "plugin" ? "mcp__plugin_project-agent-memory_pam__" : "mcp__pam__";
+  const prefix = mode === "plugin" ? "mcp__plugin_pam_mem__" : "mcp__mem__";
   const backend =
     (setting(file, "MEMORY_BACKEND") || "qdrant").toLowerCase() === "postgres"
       ? `pgvector via pREST at ${hostOf(setting(file, "PREST_URL"))}`

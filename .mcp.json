@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "pam": {
+    "mem": {
       "command": "node",
       "args": ["bin/server.cjs"]
     }

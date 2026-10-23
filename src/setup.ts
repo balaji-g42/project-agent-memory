@@ -21,9 +21,9 @@ const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const HOOK_DEST = path.join(CLAUDE_DIR, "hooks", "pam-inject.cjs");
 const STAMP = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
 
-const SERVER_KEY = "pam";
-const LEGACY_KEYS = ["memory-qdrant-mcp", "memory", SERVER_KEY];
-const PLUGIN_ID = "project-agent-memory@balaji-g42";
+const SERVER_KEY = "mem";
+const LEGACY_KEYS = ["memory-qdrant-mcp", "memory", "pam", SERVER_KEY];
+const PLUGIN_ID = "pam@balaji-g42";
 const MARKETPLACE = "balaji-g42/project-agent-memory";
 const CHECK_PROJECT = "__pam_setup_check";
 const MODES = ["plugin", "mcp", "skill", "vault"];
@@ -266,7 +266,7 @@ function mergeSettings(mode: string, vaultPath?: string) {
         log(`hook copied to ${HOOK_DEST}`);
     }
 
-    const allow = mode === "plugin" ? "mcp__plugin_project-agent-memory_pam__*" : mode === "vault" ? null : "mcp__pam__*";
+    const allow = mode === "plugin" ? "mcp__plugin_pam_mem__*" : mode === "vault" ? null : "mcp__mem__*";
     if (allow) {
         const perms = settings.permissions ??= {};
         const list: string[] = perms.allow ??= [];
