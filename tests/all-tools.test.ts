@@ -44,9 +44,10 @@ describe('Memory MCP v3 tool surface', () => {
             await prest.deleteCollection(`memory_bank_${PROJECT}-fresh`).catch(() => {});
         } else {
             const { QdrantClient } = await import('@qdrant/js-client-rest');
+            const { qdrantPort } = await import('../src/init.js');
             const qdrant = new QdrantClient({
                 url: process.env.QDRANT_URL,
-                port: 443,
+                port: process.env.QDRANT_URL ? qdrantPort(process.env.QDRANT_URL) : undefined,
                 apiKey: process.env.QDRANT_API_KEY || undefined,
                 // @ts-ignore - checkCompatibility may not be in the types but is valid
                 checkCompatibility: false
