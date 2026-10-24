@@ -29,6 +29,7 @@ export interface Config {
     CACHE_TTL_SECONDS: number;
     EMBEDDING_CACHE_SIZE: number;
     QUERY_CACHE_SIZE: number;
+    AUTO_CREATE_COLLECTIONS: boolean;
 }
 
 export interface CacheItem<T> {
