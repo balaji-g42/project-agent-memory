@@ -1,5 +1,8 @@
+import { createHash } from 'crypto';
 import config from './config.js';
 import type { CacheItem } from './types.js';
+
+const hashText = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 /**
  * Simple LRU Cache implementation for performance optimization
@@ -86,13 +89,13 @@ export const patternCache = new LRUCache<any>(50); // For system patterns
  * Cache key generators for consistent caching
  */
 export const cacheKeys = {
-    embedding: (text: string): string => `embed:${text.length}:${text.slice(0, 50)}`,
+    embedding: (text: string): string => `embed:${hashText(text)}`,
     query: (projectName: string, queryText: string, memoryType: string | undefined, topK: number): string =>
-        `query:${projectName}:${queryText.slice(0, 50)}:${memoryType || 'all'}:${topK}`,
+        `query:${projectName}:${hashText(queryText)}:${memoryType || 'all'}:${topK}`,
     structuredContext: (projectName: string, contextType: string): string =>
         `context:${projectName}:${contextType}`,
-    systemPatterns: (projectName: string): string =>
-        `patterns:${projectName}`,
+    systemPatterns: (projectName: string, limit: number): string =>
+        `patterns:${projectName}:${limit}`,
     decisions: (projectName: string, limit: number): string =>
         `decisions:${projectName}:${limit}`
 };

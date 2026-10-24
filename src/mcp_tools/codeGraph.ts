@@ -220,7 +220,7 @@ async function queryCodeGraph(
     const [byVector, byName] = await Promise.all([
         client.query(collectionName, { query: vector, limit, filter: { must: [projectFilter] }, with_payload: true }),
         client.scroll(collectionName, {
-            filter: { must: [projectFilter, { key: "metadata.label", match: { any: [query, `${query}()`] } }] },
+            filter: { must: [projectFilter, { key: "metadata.label", match: { any: [query, `${query}()`, `.${query}()`] } }] },
             limit,
             with_payload: true,
             with_vector: false

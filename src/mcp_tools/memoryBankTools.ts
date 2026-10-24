@@ -4,16 +4,12 @@ import { embeddingCache, queryCache, contextCache, patternCache, cacheKeys, cach
 import type { 
     MemoryType, 
     BatchLogEntry, 
-    BatchQuery, 
-    BatchContextUpdate,
     WorkspaceInfo,
-    SyncSource,
-    ProgressStatus,
-    Priority,
     LinkDirection
 } from "../types.js";
 
 import { getEmbeddingProvider } from "../embeddings.js";
+import { MAX_TEXT_LENGTH_FOR_EMBEDDING } from "../constants.js";
 
 /**
  * Cached embedding generation with performance optimization
@@ -57,11 +53,10 @@ async function getCachedEmbeddings(texts: string[]): Promise<number[][]> {
 const MEMORY_TYPES: MemoryType[] = ["productContext", "activeContext", "systemPatterns", "decisionLog", "progress", "contextHistory", "customData", "knowledgeLink"];
 
 // Context structured context types
-const STRUCTURED_CONTEXT_TYPES: ("productContext" | "activeContext")[] = ["productContext", "activeContext"];
-const DECISION_TYPE: MemoryType = "decisionLog";
-const PROGRESS_TYPE: MemoryType = "progress";
+const LIST_PAGE_SIZE = 256;
+const PLACEHOLDER_PREFIX = "Initial placeholder for ";
+const STRUCTURED_CONTEXT_TYPES:("productContext" | "activeContext")[] = ["productContext", "activeContext"];
 const SYSTEM_PATTERN_TYPE: MemoryType = "systemPatterns";
-const CUSTOM_DATA_TYPE: MemoryType = "customData";
 
 // Interface definitions for return types
 interface QueryResult {
@@ -88,21 +83,6 @@ interface NeighborResult {
     type: string;
 }
 
-interface DecisionResult {
-    id: string | number;
-    summary: string;
-    timestamp: string;
-}
-
-interface SemanticSearchResult {
-    id: string | number;
-    score: number;
-    content: string;
-    type: string;
-    timestamp: string;
-    structured: boolean;
-}
-
 interface KnowledgeLink {
     id: string | number;
     sourceId: string;
@@ -120,39 +100,10 @@ interface ContextHistoryEntry {
     pointId: string;
 }
 
-interface ProgressEntry {
-    id: string | number;
-    content: string;
-    status: string;
-    category: string;
-    priority: string;
-    timestamp: string;
-}
-
-interface ProgressSearchResult extends ProgressEntry {
-    score: number;
-}
-
 interface SystemPattern {
     id: string | number;
     pattern: string;
     timestamp: string;
-}
-
-interface SystemPatternSearchResult extends SystemPattern {
-    score: number;
-}
-
-interface CustomDataEntry {
-    id: string | number;
-    dataType: string;
-    data: any;
-    metadata: Record<string, any>;
-    timestamp: string;
-}
-
-interface CustomDataSearchResult extends CustomDataEntry {
-    score: number;
 }
 
 interface WorkspaceStructure {
@@ -171,24 +122,6 @@ interface InitializationResult {
     error?: string;
 }
 
-interface SyncSourceResult {
-    source: string;
-    entries: number;
-    success: boolean;
-}
-
-interface SyncResultError {
-    source: string;
-    error: string;
-}
-
-interface SyncResult {
-    timestamp: string;
-    sources: SyncSourceResult[];
-    totalEntries: number;
-    errors: SyncResultError[];
-}
-
 interface ExportData {
     projectName: string;
     exportDate: string;
@@ -199,25 +132,6 @@ interface ImportResult {
     imported: number;
     errors: string[];
     timestamp: string;
-}
-
-interface CacheStats {
-    embeddingCache: {
-        size: number;
-        maxSize: number;
-    };
-    queryCache: {
-        size: number;
-        maxSize: number;
-    };
-    contextCache: {
-        size: number;
-        maxSize: number;
-    };
-    patternCache: {
-        size: number;
-        maxSize: number;
-    };
 }
 
 // ----- Log memory entry -----
@@ -305,6 +219,31 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
     return formattedResults;
 }
 
+async function logMemoryChunked(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null, metadata: Record<string, any> = {}): Promise<string[]> {
+    if (content.length <= MAX_TEXT_LENGTH_FOR_EMBEDDING) {
+        return [await logMemory(projectName, memoryType, content, topLevelId, metadata)];
+    }
+
+    const chunks = getEmbeddingProvider().chunkText(content, Infinity);
+    const headId = topLevelId ? toPointId(topLevelId) : uuidv4();
+    const ids: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+        ids.push(await logMemory(projectName, memoryType, chunks[i], i === 0 ? headId : null, {
+            ...metadata,
+            chunkGroup: headId,
+            chunkIndex: i,
+            chunkCount: chunks.length
+        }));
+    }
+
+    await createKnowledgeLink(projectName, ids.slice(1).map((toId, i) => ({
+        from_id: ids[i],
+        to_id: toId,
+        relation: "next_chunk"
+    })));
+    return ids;
+}
+
 async function listMemory(projectName: string, memoryType: string | null = null, limit: number = 20, metadataFilter: Record<string, any> | null = null): Promise<QueryResult[]> {
     const collectionName = await initMemoryBank(projectName);
 
@@ -312,14 +251,22 @@ async function listMemory(projectName: string, memoryType: string | null = null,
     if (memoryType) mustFilter.push({ key: "type", match: { value: memoryType } });
     mustFilter.push(...metadataFilterClauses(metadataFilter));
 
-    const response = await client.scroll(collectionName, {
-        filter: { must: mustFilter },
-        limit,
-        with_payload: true,
-        with_vector: false
-    });
+    const points: any[] = [];
+    let offset: string | number | null | undefined;
+    do {
+        const page = await client.scroll(collectionName, {
+            filter: { must: mustFilter },
+            limit: Math.max(limit, LIST_PAGE_SIZE),
+            ...(offset != null ? { offset } : {}),
+            with_payload: true,
+            with_vector: false
+        });
+        points.push(...page.points);
+        offset = page.next_page_offset;
+    } while (offset != null);
 
-    return response.points
+    return points
+        .filter((point: any) => !String(point.payload?.content ?? "").startsWith(PLACEHOLDER_PREFIX))
         .map((point: any) => ({
             id: point.id,
             score: 0,
@@ -328,7 +275,8 @@ async function listMemory(projectName: string, memoryType: string | null = null,
             timestamp: point.payload?.timestamp,
             metadata: point.payload?.metadata ?? {}
         }))
-        .sort((a: QueryResult, b: QueryResult) => String(b.timestamp).localeCompare(String(a.timestamp)));
+        .sort((a: QueryResult, b: QueryResult) => String(b.timestamp).localeCompare(String(a.timestamp)))
+        .slice(0, limit);
 }
 
 async function updateMemory(projectName: string, memoryId: string, content?: string, metadata?: Record<string, any>): Promise<boolean> {
@@ -529,90 +477,6 @@ async function updateStructuredContext(projectName: string, contextType: "produc
     return pointId;
 }
 
-// ----- Get decisions with structured format -----
-async function getDecisions(projectName: string, limit: number = 10, _tags_filter_include_all: string[] = [], _tags_filter_include_any: string[] = []): Promise<DecisionResult[]> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    // Build filter
-    const mustFilter: any[] = [
-        { key: "project", match: { value: projectName } },
-        { key: "type", match: { value: DECISION_TYPE } }
-    ];
-
-    // For now, we'll implement basic filtering - tags would need additional payload structure
-    const { points: results } = await client.query(collectionName, {
-        with_payload: true,
-        query: (await getEmbeddingProvider().embedTexts(["decisions"]))[0],
-        limit: limit,
-        filter: { must: mustFilter }
-    });
-
-    return results.map((hit: any) => ({
-        id: hit.id,
-        summary: hit.payload?.content,
-        timestamp: hit.payload?.timestamp
-    }));
-}
-
-// ----- Search decisions with full-text search simulation -----
-async function searchDecisionsFTS(projectName: string, queryTerm: string, limit: number = 10): Promise<DecisionResult[]> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    // Use semantic search with the query term
-    const vector = (await getEmbeddingProvider().embedTexts([queryTerm]))[0];
-
-    const { points: results } = await client.query(collectionName, {
-        with_payload: true,
-        query: vector,
-        limit: limit,
-        filter: {
-            must: [
-                { key: "project", match: { value: projectName } },
-                { key: "type", match: { value: DECISION_TYPE } }
-            ]
-        }
-    });
-
-    return results.map((hit: any) => ({
-        id: hit.id,
-        summary: hit.payload?.content,
-        score: hit.score,
-        timestamp: hit.payload?.timestamp
-    }));
-}
-
-// ----- Semantic search across all memory types -----
-async function semanticSearch(projectName: string, queryText: string, limit: number = 10, memoryTypes: string[] | null = null): Promise<SemanticSearchResult[]> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    const vector = (await getEmbeddingProvider().embedTexts([queryText]))[0];
-
-    // Build filter
-    const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
-    if (memoryTypes && memoryTypes.length > 0) {
-        mustFilter.push({
-            key: "type",
-            match: { any: memoryTypes }
-        });
-    }
-
-    const { points: results } = await client.query(collectionName, {
-        with_payload: true,
-        query: vector,
-        limit: limit,
-        filter: { must: mustFilter }
-    });
-
-    return results.map((hit: any) => ({
-        id: hit.id,
-        score: hit.score,
-        content: hit.payload?.content,
-        type: hit.payload?.type,
-        timestamp: hit.payload?.timestamp,
-        structured: hit.payload?.structured || false
-    }));
-}
-
 // ----- Knowledge graph linking -----
 const MAX_GRAPH_EDGES = 10000;
 
@@ -753,12 +617,11 @@ async function getContextHistory(projectName: string, contextType: "productConte
     const { points: results } = await client.query(collectionName, {
         with_payload: true,
         query: (await getEmbeddingProvider().embedTexts(["context history"]))[0],
-        limit: limit,
+        limit: limit * 4,
         filter: {
             must: [
                 { key: "project", match: { value: projectName } },
-                { key: "type", match: { value: "contextHistory" } },
-                { key: "contextType", match: { value: contextType } }
+                { key: "type", match: { value: "contextHistory" } }
             ]
         }
     });
@@ -766,6 +629,7 @@ async function getContextHistory(projectName: string, contextType: "productConte
     return results.map((hit: any) => {
         try {
             const historyData = JSON.parse(hit.payload?.content);
+            if (historyData.contextType !== contextType) return null;
             return {
                 id: hit.id,
                 contextType: historyData.contextType,
@@ -776,7 +640,7 @@ async function getContextHistory(projectName: string, contextType: "productConte
         } catch (e) {
             return null;
         }
-    }).filter((item: any): item is ContextHistoryEntry => item !== null);
+    }).filter((item: any): item is ContextHistoryEntry => item !== null).slice(0, limit);
 }
 
 // ----- Batch operations -----
@@ -825,80 +689,6 @@ async function batchLogMemory(projectName: string, entries: BatchLogEntry[]): Pr
     return points.map(point => point.id);
 }
 
-/**
- * Batch query memory with multiple queries
- * @param projectName - Name of the project
- * @param queries - Array of {queryText, memoryType, topK} objects
- * @returns Array of query results
- */
-async function batchQueryMemory(projectName: string, queries: BatchQuery[]): Promise<QueryResult[][]> {
-    if (!Array.isArray(queries) || queries.length === 0) {
-        throw new Error("Queries must be a non-empty array");
-    }
-
-    try {
-        // Initialize memory bank - this can fail if Qdrant is unavailable
-        const collectionName = await initMemoryBank(projectName);
-
-        // Process all queries in parallel
-        const queryPromises = queries.map(async (query) => {
-            const vectors = await getCachedEmbeddings([query.queryText]);
-            const vector = vectors[0];
-
-            // Build filter
-            const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
-            if (query.memoryType) mustFilter.push({ key: "type", match: { value: query.memoryType } });
-
-            const { points: results } = await client.query(collectionName, {
-                with_payload: true,
-                query: vector,
-                limit: query.topK || 5,
-                filter: { must: mustFilter }
-            });
-
-            return results.map((hit: any) => ({
-                id: hit.id,
-                score: hit.score,
-                content: hit.payload?.content,
-                type: hit.payload?.type,
-                timestamp: hit.payload?.timestamp,
-                metadata: hit.payload?.metadata ?? {}
-            }));
-        });
-
-        return await Promise.all(queryPromises);
-    } catch (error) {
-        // Fallback: return empty results when Qdrant is unavailable
-        return queries.map(() => []);
-    }
-}
-
-/**
- * Batch update multiple structured contexts
- * @param projectName - Name of the project
- * @param updates - Array of {contextType, patchContent} objects
- * @returns Array of update result IDs
- */
-async function batchUpdateStructuredContext(projectName: string, updates: BatchContextUpdate[]): Promise<string[]> {
-    if (!Array.isArray(updates) || updates.length === 0) {
-        throw new Error("Updates must be a non-empty array");
-    }
-
-    const results: string[] = [];
-
-    // Process updates sequentially to avoid conflicts
-    for (const update of updates) {
-        if (!STRUCTURED_CONTEXT_TYPES.includes(update.contextType)) {
-            throw new Error(`Invalid structured context type: ${update.contextType}`);
-        }
-
-        const resultId = await updateStructuredContext(projectName, update.contextType, update.patchContent);
-        results.push(resultId);
-    }
-
-    return results;
-}
-
 // ----- System patterns management -----
 
 /**
@@ -909,10 +699,10 @@ async function batchUpdateStructuredContext(projectName: string, updates: BatchC
  */
 async function getSystemPatterns(projectName: string, limit: number = 50): Promise<SystemPattern[]> {
     // Check cache first
-    const cacheKey = cacheKeys.systemPatterns(projectName);
+    const cacheKey = cacheKeys.systemPatterns(projectName, limit);
     const cachedResult = cacheUtils.getCached(patternCache, cacheKey);
     if (cachedResult) {
-        return cachedResult.slice(0, limit); // Return cached results up to limit
+        return cachedResult;
     }
 
     const collectionName = `memory_bank_${projectName}`;
@@ -941,386 +731,9 @@ async function getSystemPatterns(projectName: string, limit: number = 50): Promi
     return formattedResults;
 }
 
-/**
- * Update or add system patterns
- * @param projectName - Name of the project
- * @param patterns - Array of pattern strings to add/update
- * @returns Array of logged pattern IDs
- */
-async function updateSystemPatterns(projectName: string, patterns: string[]): Promise<string[]> {
-    if (!Array.isArray(patterns) || patterns.length === 0) {
-        throw new Error("Patterns must be a non-empty array");
-    }
-
-    const collectionName = await initMemoryBank(projectName);
-    const ids: string[] = [];
-
-    for (const pattern of patterns) {
-        const vectors = await getCachedEmbeddings([pattern]);
-        const vector = vectors[0];
-
-        const pointId = uuidv4();
-        const point = {
-            id: pointId,
-            vector,
-            payload: {
-                type: SYSTEM_PATTERN_TYPE,
-                content: pattern,
-                timestamp: new Date().toISOString(),
-                project: projectName
-            }
-        };
-
-        await client.upsert(collectionName, { wait: true, points: [point] });
-        ids.push(pointId);
-    }
-
-    // Invalidate pattern cache
-    const cacheKey = cacheKeys.systemPatterns(projectName);
-    patternCache.getCache().delete(cacheKey);
-
-    return ids;
-}
-
-/**
- * Search system patterns using semantic search
- * @param projectName - Name of the project
- * @param queryText - Query for finding relevant patterns
- * @param limit - Maximum number of results to return
- * @returns Array of matching patterns with scores
- */
-async function searchSystemPatterns(projectName: string, queryText: string, limit: number = 10): Promise<SystemPatternSearchResult[]> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    const vector = (await getEmbeddingProvider().embedTexts([queryText]))[0];
-
-    const { points: results } = await client.query(collectionName, {
-        with_payload: true,
-        query: vector,
-        limit: limit,
-        filter: {
-            must: [
-                { key: "project", match: { value: projectName } },
-                { key: "type", match: { value: SYSTEM_PATTERN_TYPE } }
-            ]
-        }
-    });
-
-    return results.map((hit: any) => ({
-        id: hit.id,
-        pattern: hit.payload?.content,
-        score: hit.score,
-        timestamp: hit.payload?.timestamp
-    }));
-}
-
 // ----- Progress tracking with status updates -----
 
-/**
- * Get progress entries with status information
- * @param projectName - Name of the project
- * @param status - Optional status filter ('pending', 'in_progress', 'completed', 'blocked')
- * @param limit - Maximum number of entries to return
- * @returns Array of progress entries with status
- */
-async function getProgressWithStatus(projectName: string, status: ProgressStatus | null = null, limit: number = 50): Promise<ProgressEntry[]> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    const mustFilter: any[] = [
-        { key: "project", match: { value: projectName } },
-        { key: "type", match: { value: PROGRESS_TYPE } }
-    ];
-
-    if (status) {
-        mustFilter.push({ key: "status", match: { value: status } });
-    }
-
-    const { points: results } = await client.query(collectionName, {
-        with_payload: true,
-        query: (await getEmbeddingProvider().embedTexts(["progress tracking"]))[0],
-        limit: limit,
-        filter: { must: mustFilter }
-    });
-
-    return results.map((hit: any) => ({
-        id: hit.id,
-        content: hit.payload?.content,
-        status: hit.payload?.status || "unknown",
-        category: hit.payload?.category || "general",
-        priority: hit.payload?.priority || "medium",
-        timestamp: hit.payload?.timestamp
-    }));
-}
-
-/**
- * Update progress with status tracking
- * @param projectName - Name of the project
- * @param content - Progress content
- * @param status - Status ('pending', 'in_progress', 'completed', 'blocked')
- * @param category - Category of the progress item
- * @param priority - Priority level ('low', 'medium', 'high', 'critical')
- * @returns ID of the logged progress entry
- */
-async function updateProgressWithStatus(projectName: string, content: string, status: ProgressStatus = "in_progress", category: string = "general", priority: Priority = "medium"): Promise<string> {
-    const collectionName = await initMemoryBank(projectName);
-
-    const vector = (await getEmbeddingProvider().embedTexts([content]))[0];
-
-    const pointId = uuidv4();
-    const point = {
-        id: pointId,
-        vector,
-        payload: {
-            type: PROGRESS_TYPE,
-            content,
-            status,
-            category,
-            priority,
-            timestamp: new Date().toISOString(),
-            project: projectName
-        }
-    };
-
-    await client.upsert(collectionName, { wait: true, points: [point] });
-    return pointId;
-}
-
-/**
- * Search progress entries using semantic search
- * @param projectName - Name of the project
- * @param queryText - Query for finding relevant progress entries
- * @param status - Optional status filter
- * @param limit - Maximum number of results to return
- * @returns Array of matching progress entries with scores
- */
-async function searchProgressEntries(projectName: string, queryText: string, status: ProgressStatus | null = null, limit: number = 10): Promise<ProgressSearchResult[]> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    const vector = (await getEmbeddingProvider().embedTexts([queryText]))[0];
-
-    const mustFilter: any[] = [
-        { key: "project", match: { value: projectName } },
-        { key: "type", match: { value: PROGRESS_TYPE } }
-    ];
-
-    if (status) {
-        mustFilter.push({ key: "status", match: { value: status } });
-    }
-
-    const { points: results } = await client.query(collectionName, {
-        with_payload: true,
-        query: vector,
-        limit: limit,
-        filter: { must: mustFilter }
-    });
-
-    return results.map((hit: any) => ({
-        id: hit.id,
-        content: hit.payload?.content,
-        status: hit.payload?.status || "unknown",
-        category: hit.payload?.category || "general",
-        priority: hit.payload?.priority || "medium",
-        score: hit.score,
-        timestamp: hit.payload?.timestamp
-    }));
-}
-
 // ----- Custom data storage -----
-
-/**
- * Store custom data with metadata
- * @param projectName - Name of the project
- * @param data - The custom data to store
- * @param dataType - Type/category of the custom data
- * @param metadata - Additional metadata (optional)
- * @returns ID of the stored data
- */
-async function storeCustomData(projectName: string, data: any, dataType: string, metadata: Record<string, any> = {}): Promise<string> {
-    const collectionName = await initMemoryBank(projectName);
-
-    const dataString = typeof data === 'string' ? data : JSON.stringify(data);
-    const vector = (await getEmbeddingProvider().embedTexts([dataString]))[0];
-
-    const pointId = metadata.id || uuidv4();
-    const point = {
-        id: pointId,
-        vector,
-        payload: {
-            type: CUSTOM_DATA_TYPE,
-            dataType,
-            data: dataString,
-            metadata: JSON.stringify(metadata),
-            timestamp: new Date().toISOString(),
-            project: projectName,
-            customDataId: pointId
-        }
-    };
-
-    await client.upsert(collectionName, { wait: true, points: [point] });
-    return pointId;
-}
-
-/**
- * Get custom data by ID
- * @param projectName - Name of the project
- * @param dataId - ID of the custom data
- * @returns The custom data object or null if not found
- */
-async function getCustomData(projectName: string, dataId: string): Promise<CustomDataEntry | null> {
-    try {
-        // Use queryCustomData to get all custom data, then filter by ID
-        const allCustomData = await queryCustomData(projectName, null, {}, 100); // Get up to 100 items
-
-        // Find the specific item by ID
-        const foundItem = allCustomData.find(item => item.id === dataId);
-
-        return foundItem || null;
-    } catch (error) {
-        // Fallback: return null when Qdrant is unavailable
-        return null;
-    }
-}
-
-/**
- * Query custom data with filters
- * @param projectName - Name of the project
- * @param dataType - Optional data type filter
- * @param metadataFilter - Optional metadata filters
- * @param limit - Maximum number of results
- * @returns Array of custom data objects
- */
-async function queryCustomData(projectName: string, dataType: string | null = null, _metadataFilter: Record<string, any> = {}, limit: number = 50): Promise<CustomDataEntry[]> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    const mustFilter: any[] = [
-        { key: "project", match: { value: projectName } },
-        { key: "type", match: { value: CUSTOM_DATA_TYPE } }
-    ];
-
-    if (dataType) {
-        mustFilter.push({ key: "dataType", match: { value: dataType } });
-    }
-
-    // Note: Complex metadata filtering would require more advanced payload structure
-    // For now, we'll use basic filtering
-
-    const { points: results } = await client.query(collectionName, {
-        with_payload: true,
-        query: (await getEmbeddingProvider().embedTexts(["custom data query"]))[0],
-        limit: limit,
-        filter: { must: mustFilter }
-    });
-
-    return results.map((hit: any) => {
-        let parsedData: any;
-        try {
-            parsedData = JSON.parse(hit.payload?.data);
-        } catch (e) {
-            parsedData = hit.payload?.data;
-        }
-
-        let parsedMetadata: Record<string, any> = {};
-        try {
-            parsedMetadata = JSON.parse(hit.payload?.metadata);
-        } catch (e) {
-            // metadata might not be JSON
-        }
-
-        return {
-            id: hit.id,
-            dataType: hit.payload?.dataType,
-            data: parsedData,
-            metadata: parsedMetadata,
-            timestamp: hit.payload?.timestamp
-        };
-    });
-}
-
-/**
- * Search custom data using semantic search
- * @param projectName - Name of the project
- * @param queryText - Query for finding relevant custom data
- * @param dataType - Optional data type filter
- * @param limit - Maximum number of results
- * @returns Array of matching custom data with scores
- */
-async function searchCustomData(projectName: string, queryText: string, dataType: string | null = null, limit: number = 10): Promise<CustomDataSearchResult[]> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    const vector = (await getEmbeddingProvider().embedTexts([queryText]))[0];
-
-    const mustFilter: any[] = [
-        { key: "project", match: { value: projectName } },
-        { key: "type", match: { value: CUSTOM_DATA_TYPE } }
-    ];
-
-    if (dataType) {
-        mustFilter.push({ key: "dataType", match: { value: dataType } });
-    }
-
-    const { points: results } = await client.query(collectionName, {
-        with_payload: true,
-        query: vector,
-        limit: limit,
-        filter: { must: mustFilter }
-    });
-
-    return results.map((hit: any) => {
-        let parsedData: any;
-        try {
-            parsedData = JSON.parse(hit.payload?.data);
-        } catch (e) {
-            parsedData = hit.payload?.data;
-        }
-
-        let parsedMetadata: Record<string, any> = {};
-        try {
-            parsedMetadata = JSON.parse(hit.payload?.metadata);
-        } catch (e) {
-            // metadata might not be JSON
-        }
-
-        return {
-            id: hit.id,
-            dataType: hit.payload?.dataType,
-            data: parsedData,
-            metadata: parsedMetadata,
-            score: hit.score,
-            timestamp: hit.payload?.timestamp
-        };
-    });
-}
-
-/**
- * Update custom data
- * @param projectName - Name of the project
- * @param dataId - ID of the data to update
- * @param newData - New data to store
- * @param newMetadata - Updated metadata (optional)
- * @returns Success status
- */
-async function updateCustomData(projectName: string, dataId: string, newData: any, newMetadata: Record<string, any> = {}): Promise<boolean> {
-    const collectionName = `memory_bank_${projectName}`;
-
-    const dataString = typeof newData === 'string' ? newData : JSON.stringify(newData);
-    const vector = (await getEmbeddingProvider().embedTexts([dataString]))[0];
-
-    const point = {
-        id: dataId,
-        vector,
-        payload: {
-            type: CUSTOM_DATA_TYPE,
-            data: dataString,
-            metadata: JSON.stringify(newMetadata),
-            timestamp: new Date().toISOString(),
-            project: projectName,
-            customDataId: dataId
-        }
-    };
-
-    await client.upsert(collectionName, { wait: true, points: [point] });
-    return true;
-}
 
 /**
  * Initialize workspace and detect project structure
@@ -1493,76 +906,6 @@ async function initializeBasicContexts(projectName: string): Promise<void> {
             nextSteps: ['Configure project settings', 'Set up development environment']
         });
     }
-}
-
-/**
- * Sync memory with external sources (proactive logging)
- * @param projectName - Name of the project
- * @param syncSources - Array of sync source configurations
- * @returns Sync results
- */
-async function syncMemory(projectName: string, syncSources: SyncSource[] = []): Promise<SyncResult> {
-    const syncResults: SyncResult = {
-        timestamp: new Date().toISOString(),
-        sources: [],
-        totalEntries: 0,
-        errors: []
-    };
-
-    for (const source of syncSources) {
-        try {
-            const result = await syncFromSource(projectName, source);
-            syncResults.sources.push({
-                source: source.name,
-                entries: result.entries,
-                success: true
-            });
-            syncResults.totalEntries += result.entries;
-        } catch (error) {
-            syncResults.errors.push({
-                source: source.name,
-                error: (error as Error).message
-            });
-        }
-    }
-
-    // Log sync operation
-    await logMemory(projectName, 'systemPatterns', `Memory sync completed: ${syncResults.totalEntries} entries from ${syncResults.sources.length} sources`);
-
-    return syncResults;
-}
-
-/**
- * Sync from a specific source (placeholder for external integrations)
- * @param projectName - Name of the project
- * @param source - Source configuration
- * @returns Sync result for this source
- */
-async function syncFromSource(projectName: string, source: SyncSource): Promise<{ entries: number }> {
-    // This is a placeholder for actual sync implementations
-    // Could be GitHub issues, Jira tickets, Slack messages, etc.
-
-    const entries: Array<{ type: MemoryType; content: string; category?: string }> = [];
-
-    // Example: sync from Git commits (placeholder)
-    if (source.type === 'git') {
-        // Placeholder - would actually fetch git history
-        entries.push({
-            type: 'progress',
-            content: `Synced git history from ${source.config?.repository || 'repository'}`,
-            category: 'development'
-        });
-    }
-
-    // Log the entries
-    if (entries.length > 0) {
-        await batchLogMemory(projectName, entries.map(entry => ({
-            memoryType: entry.type,
-            content: entry.content
-        })));
-    }
-
-    return { entries: entries.length };
 }
 
 /**
@@ -1755,49 +1098,25 @@ function entriesToStructuredObject(entries: Array<{ heading: string; content: st
     return result;
 }
 
-/**
- * Get cache performance statistics
- * @returns Cache statistics
- */
-function getCacheStats(): CacheStats {
-    return cacheUtils.getStats();
-}
-
 export {
     logMemory,
     queryMemory,
     listMemory,
+    logMemoryChunked,
     updateMemory,
     deleteMemory,
     deleteCollection,
     logStructuredMemory,
     getStructuredContext,
     updateStructuredContext,
-    getDecisions,
-    searchDecisionsFTS,
-    semanticSearch,
     createKnowledgeLink,
     getKnowledgeLinks,
     getNeighbors,
     deleteKnowledgeLinks,
     getContextHistory,
     batchLogMemory,
-    batchQueryMemory,
-    batchUpdateStructuredContext,
     getSystemPatterns,
-    updateSystemPatterns,
-    searchSystemPatterns,
-    getProgressWithStatus,
-    updateProgressWithStatus,
-    searchProgressEntries,
-    storeCustomData,
-    getCustomData,
-    queryCustomData,
-    searchCustomData,
-    updateCustomData,
     initializeWorkspace,
-    syncMemory,
     exportMemoryToMarkdown,
-    importMemoryFromMarkdown,
-    getCacheStats
+    importMemoryFromMarkdown
 };

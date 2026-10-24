@@ -105,11 +105,11 @@ abstract class EmbeddingProviderBase {
     }
 
     // Intelligent text chunking with sentence boundary detection
-    chunkText(text: string): string[] {
+    chunkText(text: string, maxChunks: number = MAX_CHUNKS_PER_TEXT): string[] {
         const chunks: string[] = [];
         let start = 0;
 
-        while (start < text.length && chunks.length < MAX_CHUNKS_PER_TEXT) {
+        while (start < text.length && chunks.length < maxChunks) {
             let end = start + MAX_CHUNK_SIZE;
 
             // If we're not at the end, try to find a good breaking point

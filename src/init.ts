@@ -22,11 +22,17 @@ const DISTANCE_MAP: Record<string, string> = {
     Dot: "Dot",
 };
 
+function qdrantPort(url: string): number {
+    const parsed = new URL(url);
+    if (parsed.port) return Number(parsed.port);
+    return parsed.protocol === "https:" ? 443 : 80;
+}
+
 const client: VectorClient = config.MEMORY_BACKEND === "postgres"
     ? new PrestVectorClient()
     : new QdrantClient({
         url: config.QDRANT_URL,
-        port: 443,
+        port: qdrantPort(config.QDRANT_URL),
         apiKey: config.QDRANT_API_KEY || undefined,
         // @ts-ignore - checkCompatibility may not be in the types but is valid
         checkCompatibility: false
@@ -86,4 +92,4 @@ async function initMemoryBank(projectName: string): Promise<string> {
     return collectionName;
 }
 
-export { initMemoryBank, client, readVectorSize };
+export { initMemoryBank, client, readVectorSize, qdrantPort };

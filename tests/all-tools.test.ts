@@ -41,16 +41,19 @@ describe('Memory MCP v3 tool surface', () => {
             const { PrestVectorClient } = await import('../src/backends/prest.js');
             const prest = new PrestVectorClient();
             await prest.deleteCollection(`memory_bank_${PROJECT}`).catch(() => {});
+            await prest.deleteCollection(`memory_bank_${PROJECT}-fresh`).catch(() => {});
         } else {
             const { QdrantClient } = await import('@qdrant/js-client-rest');
+            const { qdrantPort } = await import('../src/init.js');
             const qdrant = new QdrantClient({
                 url: process.env.QDRANT_URL,
-                port: 443,
+                port: process.env.QDRANT_URL ? qdrantPort(process.env.QDRANT_URL) : undefined,
                 apiKey: process.env.QDRANT_API_KEY || undefined,
                 // @ts-ignore - checkCompatibility may not be in the types but is valid
                 checkCompatibility: false
             });
             await qdrant.deleteCollection(`memory_bank_${PROJECT}`).catch(() => {});
+            await qdrant.deleteCollection(`memory_bank_${PROJECT}-fresh`).catch(() => {});
         }
     });
 
@@ -382,6 +385,65 @@ describe('Memory MCP v3 tool surface', () => {
             project_name: other, queries: [{ query_text: 'database choice PostgreSQL pgvector', limit: 10 }]
         });
         expect(r.some((x: any) => x.id === state.decisionId)).toBe(false);
+    });
+
+    describe('review fixes', () => {
+        const longContent = Array.from({ length: 300 }, (_, i) => `Chunk probe sentence ${i} about linked storage.`).join(' ');
+
+        it('long content is stored as linked chunks', async () => {
+            const [created] = await call('memory_create', {
+                project_name: PROJECT, items: [{ memory_type: 'customData', content: longContent }]
+            });
+            expect(created.chunk_ids.length).toBeGreaterThan(1);
+            expect(created.id).toBe(created.chunk_ids[0]);
+            state.chunkIds = created.chunk_ids;
+
+            const last = created.chunk_ids[created.chunk_ids.length - 1];
+            const walk = await call('memory_graph', {
+                project_name: PROJECT, op: 'neighbors', id: created.id, depth: created.chunk_ids.length, direction: 'outgoing'
+            });
+            expect((walk.neighbors ?? []).map((n: any) => n.id)).toContain(last);
+
+            const group = await call('memory_read', {
+                project_name: PROJECT,
+                queries: [{ memory_type: 'customData', metadata_filter: { chunkGroup: created.id }, limit: 100 }]
+            });
+            expect(group[0].length ?? group.length).toBe(created.chunk_ids.length);
+        });
+
+        it('short content stays a single entry', async () => {
+            const [created] = await call('memory_create', {
+                project_name: PROJECT, items: [{ memory_type: 'customData', content: 'Short entry, no chunking.' }]
+            });
+            expect(created.chunk_ids).toBeUndefined();
+        });
+
+        it('history_for returns only the requested context type', async () => {
+            await call('memory_context', { project_name: PROJECT, active_context: { currentFocus: 'history probe one' } });
+            await call('memory_context', { project_name: PROJECT, active_context: { currentFocus: 'history probe two' } });
+            const r = await call('memory_context', { project_name: PROJECT, history_for: 'activeContext', history_limit: 10 });
+            expect(r.history.length).toBeGreaterThan(0);
+            expect(r.history.every((h: any) => h.contextType === 'activeContext')).toBe(true);
+        });
+
+        it('list mode does not return the init placeholders', async () => {
+            const r = await call('memory_read', { project_name: PROJECT, queries: [{ limit: 100 }] });
+            const rows = Array.isArray(r[0]) ? r[0] : r;
+            expect(rows.length).toBeGreaterThan(0);
+            expect(rows.some((x: any) => String(x.content).startsWith('Initial placeholder for '))).toBe(false);
+        });
+
+        it('memory_context works on a project that has no collection yet', async () => {
+            const r = await call('memory_context', { project_name: `${PROJECT}-fresh` });
+            expect(r).toHaveProperty('productContext');
+            expect(r).toHaveProperty('systemPatterns');
+        });
+
+        it('code_graph op=index requires root', async () => {
+            const res: any = await client.callTool({ name: 'code_graph', arguments: { project_name: PROJECT, op: 'index' } });
+            expect(res.isError).toBe(true);
+            expect(res.content?.[0]?.text).toContain('requires root');
+        });
     });
 
     describe('memory_delete', () => {
