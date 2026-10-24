@@ -1,4 +1,4 @@
-import { initMemoryBank, client } from "../init.js";
+import { initMemoryBank, createMemoryBank, client } from "../init.js";
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { embeddingCache, queryCache, contextCache, patternCache, cacheKeys, cacheUtils } from "../cache.js";
 import type { 
@@ -379,6 +379,15 @@ async function deleteMemory(projectName: string, memoryIds: string[]): Promise<n
     await client.delete(collectionName, { wait: true, points: existing.map((point: { id: string | number }) => point.id) });
     cacheUtils.invalidateProjectCache(projectName);
     return existing.length;
+}
+
+async function createCollection(projectName: string): Promise<string> {
+    const collectionName = `memory_bank_${projectName}`;
+    const existing = await client.getCollections();
+    if (existing.collections.some((c: { name: string }) => c.name === collectionName)) {
+        throw new Error(`Memory bank ${collectionName} already exists. Nothing was changed.`);
+    }
+    return createMemoryBank(projectName);
 }
 
 async function deleteCollection(projectName: string): Promise<boolean> {
@@ -1770,6 +1779,7 @@ export {
     updateMemory,
     deleteMemory,
     deleteCollection,
+    createCollection,
     logStructuredMemory,
     getStructuredContext,
     updateStructuredContext,

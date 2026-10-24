@@ -265,6 +265,7 @@ Edges are stored in the same collection as ordinary points of type `knowledgeLin
 - `export` - optional `memory_types`. Returns the memory bank as markdown.
 - `import` - `markdown` in this server's own export format. Returns `{ imported, errors, timestamp }`.
 - `summarize` - `content`. Returns a condensed version, for shrinking a long text before storing it.
+- `create_collection` - creates an empty memory bank for `project_name`. Every other tool returns an error instead of creating a missing bank, so the model confirms the name with the user first. Set `AUTO_CREATE_COLLECTIONS=true` to restore implicit creation. Errors if the bank already exists.
 - `delete_collection` - permanently deletes the entire memory bank (collection and all its points) for `project_name`. No confirmation step - irreversible.
 
 Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-REFERENCE.md).
