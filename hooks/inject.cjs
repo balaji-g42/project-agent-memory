@@ -17,9 +17,9 @@ const MAX_CONTEXT_CHARS = 6000;
 const COMMIT_WINDOW_S = 120;
 
 const CONFIG_FILE = path.join(os.homedir(), "mcp", "project-agent-memory", "config.json");
-const MEMORY_TOOLS = /^mcp__(plugin_project-agent-memory_)?pam__memory_(create|update)$/;
+const MEMORY_TOOLS = /^mcp__(plugin_pam_mem|mem)__memory_(create|update)$/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-const CODE_GRAPH_TOOL = /^mcp__(plugin_project-agent-memory_)?pam__code_graph$/;
+const CODE_GRAPH_TOOL = /^mcp__(plugin_pam_mem|mem)__code_graph$/;
 
 function readConfigFile() {
   try {
@@ -361,7 +361,8 @@ function runCli(args, input, timeout) {
     ? [process.execPath, [local], false]
     : ["npx", ["-y", "-p", `project-agent-memory@${version}`, "project-agent-memory-cli"], process.platform === "win32"];
   try {
-    return execFileSync(command, [...prefix, ...args], {
+    const quote = (arg) => (shell ? `"${String(arg).replace(/"/g, '""')}"` : arg);
+    return execFileSync(command, [...prefix, ...args].map(quote), {
       encoding: "utf8",
       input: input || "",
       timeout,
@@ -432,7 +433,7 @@ function onPreToolUse(payload) {
       fs.writeFileSync(nudged, "", "utf8");
     } catch {}
     return (
-      `The code graph for ${name} is not indexed. Run code_graph op=index now; Grep/Glob are ` +
+      `The code graph for ${name} is not indexed. Run code_graph op=index root=${payload.cwd || process.cwd()} now; Grep/Glob are ` +
       "allowed until it finishes, then code_graph op=query comes first."
     );
   }

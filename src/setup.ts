@@ -27,10 +27,10 @@ const PLUGIN_ID = "pam@balaji-g42";
 const MARKETPLACE = "balaji-g42/project-agent-memory";
 const CHECK_PROJECT = "__pam_setup_check";
 const MODES = ["plugin", "mcp", "skill", "vault"];
-const BOOL_FLAGS = ["yes", "replace-memory"];
+const BOOL_FLAGS = ["yes", "replace-memory", "no-index"];
 const VALUE_FLAGS = [
     "mode", "backend", "target", "qdrant-url", "qdrant-key",
-    "prest-url", "prest-jwt-key", "prest-database", "prest-admin", "vault-path"
+    "prest-url", "prest-jwt-key", "prest-database", "prest-admin", "vault-path", "index-root"
 ];
 const PLUGIN_OPTIONS: Env = {
     memory_backend: "MEMORY_BACKEND",
@@ -224,7 +224,7 @@ async function checkStore() {
     log(`store reachable, ${collections.length} collections`);
 
     const mismatched: string[] = [];
-    for (const { name } of collections.filter((c) => c.name.startsWith("memory_bank_"))) {
+    for (const { name } of collections.filter((c) => c.name.startsWith("memory_bank_") && !c.name.endsWith("_backup"))) {
         const size = readVectorSize((await client.getCollection(name)).config?.params);
         if (size !== undefined && size !== config.VECTOR_DIM) mismatched.push(`${name} (${size})`);
     }
@@ -255,7 +255,14 @@ function mergeSettings(mode: string, vaultPath?: string) {
             .split("${CLAUDE_PLUGIN_ROOT}/hooks/inject.cjs").join(posix(HOOK_DEST));
         const hooks = settings.hooks ??= {};
         for (const [event, groups] of Object.entries(JSON.parse(raw).hooks as Record<string, any[]>)) {
-            const have = hooks[event] ??= [];
+            const incoming = new Set(groups.map((g: any) => `${g.matcher ?? ""}|${g.hooks[0].command}`));
+            const current: any[] = hooks[event] ??= [];
+            const have = current.filter((g: any) => !(g.hooks || []).some((h: any) =>
+                h.command.includes(posix(HOOK_DEST)) && !incoming.has(`${g.matcher ?? ""}|${h.command}`)));
+            if (have.length !== current.length) {
+                hooks[event] = have;
+                changed = true;
+            }
             const keys = new Set(have.flatMap((g: any) => (g.hooks || []).map((h: any) => `${g.matcher ?? ""}|${h.command}`)));
             for (const group of groups) {
                 if (group.hooks.some((h: any) => keys.has(`${group.matcher ?? ""}|${h.command}`))) continue;

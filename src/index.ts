@@ -10,9 +10,9 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 import {
-    logMemory,
     queryMemory,
     listMemory,
+    logMemoryChunked,
     updateMemory,
     deleteMemory,
     deleteCollection,
@@ -30,6 +30,7 @@ import {
 } from "./mcp_tools/memoryBankTools.js";
 import { summarizeText } from "./mcp_tools/summarizer.js";
 import { indexCodeGraph, queryCodeGraph, codeGraphStats } from "./mcp_tools/codeGraph.js";
+import { initMemoryBank } from "./init.js";
 
 process.on("unhandledRejection", (reason) => {
     console.error("UnhandledRejection:", reason);
@@ -84,10 +85,14 @@ server.registerTool('memory_create', {
         })).min(1).describe("One entry for a single write, many for a batch")
     })
 }, async (params) => {
-    const ids = await Promise.all(params.items.map(item =>
-        logMemory(params.project_name, item.memory_type, item.content, item.id ?? null, item.metadata ?? {})
+    const results = await Promise.all(params.items.map(item =>
+        logMemoryChunked(params.project_name, item.memory_type, item.content, item.id ?? null, item.metadata ?? {})
     ));
-    return text(ids.map((id, i) => ({ id, type: params.items[i].memory_type })));
+    return text(results.map((ids, i) => ({
+        id: ids[0],
+        type: params.items[i].memory_type,
+        ...(ids.length > 1 ? { chunk_ids: ids } : {})
+    })));
 });
 
 server.registerTool('memory_read', {
@@ -149,6 +154,7 @@ server.registerTool('memory_context', {
         history_limit: z.number().optional().default(10).describe("Maximum history entries to return when history_for is set")
     })
 }, async (params) => {
+    await initMemoryBank(params.project_name);
     if (params.product_context) {
         await updateStructuredContext(params.project_name, "productContext", params.product_context);
     }
@@ -241,11 +247,12 @@ server.registerTool('code_graph', {
         depth: z.number().int().min(0).max(3).default(1).describe("op=query: edge hops to walk from the matches"),
         limit: z.number().int().min(1).max(20).default(5).describe("op=query: number of seed matches"),
         relation: z.string().optional().describe("op=query: only walk edges of this relation, e.g. calls, imports"),
-        root: z.string().optional().describe("op=index: absolute repo path; defaults to the server's working directory")
+        root: z.string().optional().describe("op=index: absolute repo path (required)")
     })
 }, async (params) => {
     if (params.op === "index") {
-        return text(await indexCodeGraph(params.project_name, params.root ?? process.cwd()));
+        if (!params.root) throw new Error("op=index requires root (absolute repo path)");
+        return text(await indexCodeGraph(params.project_name, params.root));
     }
     if (params.op === "stats") {
         return text(await codeGraphStats(params.project_name));

@@ -66,8 +66,8 @@ export interface VectorClient {
     ): Promise<{ points: Array<{ id: string | number; score: number; payload?: Record<string, any> }> }>;
     scroll(
         name: string,
-        options: { filter?: VectorFilter; limit?: number; with_payload?: boolean; with_vector?: boolean }
-    ): Promise<{ points: Array<{ id: string | number; payload?: Record<string, any> }>; next_page_offset: unknown }>;
+        options: { filter?: VectorFilter; limit?: number; offset?: string | number; with_payload?: boolean; with_vector?: boolean }
+    ): Promise<{ points: Array<{ id: string | number; payload?: Record<string, any> }>; next_page_offset?: string | number | null }>;
     delete(name: string, options: { wait?: boolean; points: Array<string | number> }): Promise<any>;
 }
 

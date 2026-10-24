@@ -11,6 +11,7 @@ if (-not (Test-Path (Join-Path $vault ".git"))) {
 
 Set-Location $vault
 git pull --rebase --autostash
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 if (-not (git status --porcelain)) {
     Write-Host "Vault clean, nothing to push."
@@ -18,6 +19,9 @@ if (-not (git status --porcelain)) {
 }
 
 git add -A
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 git commit -m "memory: sync from $env:COMPUTERNAME $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 git push
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "Vault synced."
