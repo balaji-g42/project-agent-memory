@@ -47,7 +47,7 @@ function log(msg: string) {
     console.log(`  ${msg}`);
 }
 
-function parseArgs(argv: string[]): Opts {
+export function parseArgs(argv: string[]): Opts {
     const out: Opts = {};
     for (let i = 0; i < argv.length; i++) {
         const key = argv[i].replace(/^--/, "");
@@ -244,7 +244,7 @@ async function checkStore() {
     );
 }
 
-function mergeSettings(mode: string, vaultPath?: string) {
+export function mergeSettings(mode: string, vaultPath?: string) {
     const settings = readJson(SETTINGS);
     let changed = false;
 
@@ -259,10 +259,8 @@ function mergeSettings(mode: string, vaultPath?: string) {
             const current: any[] = hooks[event] ??= [];
             const have = current.filter((g: any) => !(g.hooks || []).some((h: any) =>
                 h.command.includes(posix(HOOK_DEST)) && !incoming.has(`${g.matcher ?? ""}|${h.command}`)));
-            if (have.length !== current.length) {
-                hooks[event] = have;
-                changed = true;
-            }
+            if (have.length !== current.length) changed = true;
+            hooks[event] = have;
             const keys = new Set(have.flatMap((g: any) => (g.hooks || []).map((h: any) => `${g.matcher ?? ""}|${h.command}`)));
             for (const group of groups) {
                 if (group.hooks.some((h: any) => keys.has(`${group.matcher ?? ""}|${h.command}`))) continue;

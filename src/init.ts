@@ -92,4 +92,4 @@ async function initMemoryBank(projectName: string): Promise<string> {
     return collectionName;
 }
 
-export { initMemoryBank, client, readVectorSize };
+export { initMemoryBank, client, readVectorSize, qdrantPort };
