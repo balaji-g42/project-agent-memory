@@ -18,6 +18,7 @@ import {
     updateMemory,
     deleteMemory,
     deleteCollection,
+    createCollection,
     getStructuredContext,
     updateStructuredContext,
     getSystemPatterns,
@@ -258,10 +259,10 @@ server.registerTool('memory_graph', {
 });
 
 server.registerTool('memory_admin', {
-    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it, op=delete_collection permanently deletes the entire memory bank for a project. op=list_projects lists other projects you can read; op=set_visibility sets this project's default; op=list_archive, restore, purge and history manage entries other projects deleted or edited here.",
+    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it, op=delete_collection permanently deletes the entire memory bank for a project, op=create_collection creates an empty memory bank for a new project (other tools refuse to create one implicitly: confirm the project name with the user first). op=list_projects lists other projects you can read; op=set_visibility sets this project's default; op=list_archive, restore, purge and history manage entries other projects deleted or edited here.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
-        op: z.enum(["export", "import", "summarize", "delete_collection", "list_projects", "set_visibility", "list_archive", "restore", "purge", "history"]).describe("Admin operation"),
+        op: z.enum(["export", "import", "summarize", "delete_collection", "create_collection", "list_projects", "set_visibility", "list_archive", "restore", "purge", "history"]).describe("Admin operation"),
         memory_types: z.array(memoryTypeSchema).optional().describe("op=export: types to include; defaults to the structured contexts, decisions and progress"),
         markdown: z.string().optional().describe("op=import: markdown in this server's export format"),
         content: z.string().optional().describe("op=summarize: text to condense"),
@@ -292,6 +293,9 @@ server.registerTool('memory_admin', {
     if (params.op === "import") {
         if (!params.markdown) throw new Error("op=import requires markdown");
         return text(await importMemoryFromMarkdown(params.project_name, params.markdown));
+    }
+    if (params.op === "create_collection") {
+        return text({ created: await createCollection(params.project_name) });
     }
     if (params.op === "delete_collection") {
         return text({ deleted: await deleteCollection(params.project_name) });

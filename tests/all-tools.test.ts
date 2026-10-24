@@ -25,6 +25,7 @@ describe('Memory MCP v3 tool surface', () => {
             env: {
                 ...(process.env as Record<string, string>),
                 VECTOR_DIM: '768',
+                AUTO_CREATE_COLLECTIONS: 'true',
                 EMBEDDING_PROVIDER: 'onnx',
                 EMBEDDING_MODEL: 'nomic-ai/nomic-embed-text-v1.5'
             }

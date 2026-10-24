@@ -76,7 +76,8 @@ const config: Config = {
     POOL_SIZE: parseInt(setting("POOL_SIZE") || setting("QDRANT_POOL_SIZE") || "10"),
     CACHE_TTL_SECONDS: parseInt(setting("CACHE_TTL_SECONDS") || "300"), // 5 minutes default
     EMBEDDING_CACHE_SIZE: parseInt(setting("EMBEDDING_CACHE_SIZE") || "1000"),
-    QUERY_CACHE_SIZE: parseInt(setting("QUERY_CACHE_SIZE") || "500")
+    QUERY_CACHE_SIZE: parseInt(setting("QUERY_CACHE_SIZE") || "500"),
+    AUTO_CREATE_COLLECTIONS: ["true", "1"].includes((setting("AUTO_CREATE_COLLECTIONS") || "false").toLowerCase())
 };
 
 export default config;
