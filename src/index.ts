@@ -102,7 +102,7 @@ server.registerTool('memory_create', {
             memory_type: memoryTypeSchema.describe("Memory type"),
             content: z.string().describe("Content to store"),
             id: z.string().optional().describe("Optional explicit id; overwrites an existing entry"),
-            metadata: z.record(z.any()).optional().describe("Filterable fields, e.g. { status: \"in_progress\", priority: \"high\" }"),
+            metadata: z.record(z.string(), z.any()).optional().describe("Filterable fields, e.g. { status: \"in_progress\", priority: \"high\" }"),
             private: z.boolean().optional().describe("Hide from other projects")
         })).min(1).describe("One entry for a single write, many for a batch")
     })
@@ -132,7 +132,7 @@ server.registerTool('memory_read', {
         queries: z.array(z.object({
             query_text: z.string().optional().describe("Search text; omit to list by recency"),
             memory_type: memoryTypeSchema.optional().describe("Restrict to one memory type"),
-            metadata_filter: z.record(z.any()).optional().describe("Metadata equality filter, e.g. { status: [\"pending\", \"blocked\"] }"),
+            metadata_filter: z.record(z.string(), z.any()).optional().describe("Metadata equality filter, e.g. { status: [\"pending\", \"blocked\"] }"),
             limit: z.number().optional().describe("Maximum entries to return"),
             heat: z.number().int().min(1).max(10).optional().describe("Other projects only: 1 loose to 10 strict match")
         })).min(1).describe("One query for a single read, many for a batch")
@@ -157,7 +157,7 @@ server.registerTool('memory_update', {
         items: z.array(z.object({
             id: z.string().describe("Id of the entry to update"),
             content: z.string().optional().describe("New content; omit to keep the existing content and vector"),
-            metadata: z.record(z.any()).optional().describe("Metadata fields to merge in"),
+            metadata: z.record(z.string(), z.any()).optional().describe("Metadata fields to merge in"),
             expected_version: z.number().int().optional().describe("Version from your last read"),
             private: z.boolean().optional().describe("Hide from other projects")
         })).min(1).describe("One entry for a single update, many for a batch")
@@ -191,8 +191,8 @@ server.registerTool('memory_context', {
     description: "Load or update the project's working context: product context, active context and system patterns. Call at session start with no update fields; pass product_context or active_context to patch them.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
-        product_context: z.record(z.any()).optional().describe("Patch to merge into product context"),
-        active_context: z.record(z.any()).optional().describe("Patch to merge into active context"),
+        product_context: z.record(z.string(), z.any()).optional().describe("Patch to merge into product context"),
+        active_context: z.record(z.string(), z.any()).optional().describe("Patch to merge into active context"),
         pattern_limit: z.number().optional().default(20).describe("Maximum system patterns to return"),
         history_for: z.enum(["productContext", "activeContext"]).optional().describe("Also return recent change history for this context type"),
         history_limit: z.number().optional().default(10).describe("Maximum history entries to return when history_for is set")
