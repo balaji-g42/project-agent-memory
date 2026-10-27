@@ -62,7 +62,7 @@ async function readStdin(): Promise<string> {
 
 async function main() {
     const [command, projectName, arg] = process.argv.slice(2);
-    if (!projectName) throw new Error("Usage: project-agent-memory-cli <recall|context|index|stats> <project_name> [root]\n       project-agent-memory-cli migrate <project_name|--all> [--dry-run] [--resume]");
+    if (!projectName) throw new Error("Usage: project-agent-memory-cli <recall|context|index|stats> <project_name> [root]\n       project-agent-memory-cli migrate <project_name|--all> [--dry-run] [--resume]\n       project-agent-memory-cli upgrade --all [--dry-run] [--private a,b]");
 
     if (command === "recall") {
         process.stdout.write(await recall(projectName, await readStdin()));
@@ -79,6 +79,13 @@ async function main() {
         const flags = process.argv.slice(4);
         const result = await migrate(projectName, { dryRun: flags.includes("--dry-run"), resume: flags.includes("--resume") });
         process.stdout.write(JSON.stringify(result, null, 2));
+    } else if (command === "upgrade") {
+        const { upgradeProjects } = await import("./hive.js");
+        const flags = process.argv.slice(4);
+        const privateIndex = flags.indexOf("--private");
+        const privateProjects = privateIndex >= 0 ? (flags[privateIndex + 1] ?? "").split(",").filter(Boolean) : [];
+        const report = await upgradeProjects({ dryRun: flags.includes("--dry-run"), privateProjects });
+        process.stdout.write(JSON.stringify(report, null, 2));
     } else {
         throw new Error(`Unknown command: ${command}`);
     }

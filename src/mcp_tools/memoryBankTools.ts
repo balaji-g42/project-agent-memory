@@ -10,6 +10,33 @@ import type {
 
 import { getEmbeddingProvider } from "../embeddings.js";
 import { MAX_TEXT_LENGTH_FOR_EMBEDDING } from "../constants.js";
+import config from "../config.js";
+import {
+    DEFAULT_HEAT,
+    HIVE_DEFAULT_LIMIT,
+    HIVE_MAX_LIMIT,
+    MAX_HIVE_PROJECTS,
+    SESSION_ID,
+    SETTINGS_TYPE,
+    archiveName,
+    bankName,
+    minScoreForHeat
+} from "../hiveConstants.js";
+import {
+    archiveDeleted,
+    archiveSuperseded,
+    bankExists,
+    casFilter,
+    conflictMessage,
+    foreignFilter,
+    isVisibleToForeign,
+    looksSecret,
+    projectVisibility,
+    snapshotOf,
+    versionOf,
+    visibilityFromFlag,
+    type Visibility
+} from "../hive.js";
 
 /**
  * Cached embedding generation with performance optimization
@@ -66,6 +93,21 @@ interface QueryResult {
     type: string;
     timestamp: string;
     metadata: Record<string, any>;
+    version?: number;
+    private?: boolean;
+    previous?: Record<string, any>;
+    project?: string;
+}
+
+interface WriteStamp {
+    writtenBy?: string;
+    visibility?: Visibility;
+}
+
+interface UpdateOptions {
+    caller?: string;
+    expectedVersion?: number;
+    isPrivate?: boolean;
 }
 
 interface GraphEdgeInput {
@@ -135,7 +177,7 @@ interface ImportResult {
 }
 
 // ----- Log memory entry -----
-async function logMemory(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null, metadata: Record<string, any> = {}): Promise<string> {
+async function logMemory(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null, metadata: Record<string, any> = {}, stamp: WriteStamp = {}): Promise<string> {
     if (!MEMORY_TYPES.includes(memoryType)) {
         throw new Error(`Invalid memory type: ${memoryType}`);
     }
@@ -148,6 +190,16 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
 
     const pointId = topLevelId ? toPointId(topLevelId) : uuidv4();
 
+    let version = 1;
+    let visibility: Visibility | undefined = looksSecret(content) ? "private" : stamp.visibility;
+    if (topLevelId) {
+        const [existing] = await client.retrieve(collectionName, { ids: [pointId], with_payload: true });
+        if (existing) {
+            version = versionOf(existing.payload) + 1;
+            visibility = visibility ?? existing.payload?.visibility;
+        }
+    }
+
     const point = {
         id: pointId,
         vector,
@@ -156,7 +208,12 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
             content,
             metadata,
             timestamp: new Date().toISOString(),
-            project: projectName
+            project: projectName,
+            version,
+            written_by: stamp.writtenBy ?? projectName,
+            written_by_session: SESSION_ID,
+            write_token: uuidv4(),
+            ...(visibility ? { visibility } : {})
         }
     };
 
@@ -176,6 +233,22 @@ function metadataFilterClauses(metadataFilter: Record<string, any> | null): any[
             ? { key: `metadata.${key}`, match: { any: value } }
             : { key: `metadata.${key}`, match: { value } }
     ));
+}
+
+function toQueryResult(point: { id: string | number; score?: number; payload?: Record<string, any> | null }, project?: string): QueryResult {
+    const payload = point.payload ?? {};
+    return {
+        id: point.id,
+        score: point.score ?? 0,
+        content: payload.content,
+        type: payload.type,
+        timestamp: payload.timestamp,
+        metadata: payload.metadata ?? {},
+        ...(payload.version !== undefined ? { version: payload.version } : {}),
+        ...(payload.visibility === "private" ? { private: true } : {}),
+        ...(payload.previous ? { previous: payload.previous } : {}),
+        ...(project ? { project } : {})
+    };
 }
 
 async function queryMemory(projectName: string, queryText: string, memoryType: string | null = null, topK: number = 5, metadataFilter: Record<string, any> | null = null): Promise<QueryResult[]> {
@@ -201,17 +274,10 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
         with_payload: true,
         query: vector,
         limit: topK,
-        filter: { must: mustFilter }
+        filter: { must: mustFilter, must_not: [{ key: "type", match: { value: SETTINGS_TYPE } }] }
     });
 
-    const formattedResults: QueryResult[] = results.map((hit: any) => ({
-        id: hit.id,
-        score: hit.score,
-        content: hit.payload?.content,
-        type: hit.payload?.type,
-        timestamp: hit.payload?.timestamp,
-        metadata: hit.payload?.metadata ?? {}
-    }));
+    const formattedResults: QueryResult[] = results.map((hit: any) => toQueryResult(hit));
 
     // Cache the results
     cacheUtils.setCached(queryCache, cacheKey, formattedResults);
@@ -219,9 +285,9 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
     return formattedResults;
 }
 
-async function logMemoryChunked(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null, metadata: Record<string, any> = {}): Promise<string[]> {
+async function logMemoryChunked(projectName: string, memoryType: MemoryType, content: string, topLevelId: string | null = null, metadata: Record<string, any> = {}, stamp: WriteStamp = {}): Promise<string[]> {
     if (content.length <= MAX_TEXT_LENGTH_FOR_EMBEDDING) {
-        return [await logMemory(projectName, memoryType, content, topLevelId, metadata)];
+        return [await logMemory(projectName, memoryType, content, topLevelId, metadata, stamp)];
     }
 
     const chunks = getEmbeddingProvider().chunkText(content, Infinity);
@@ -233,7 +299,7 @@ async function logMemoryChunked(projectName: string, memoryType: MemoryType, con
             chunkGroup: headId,
             chunkIndex: i,
             chunkCount: chunks.length
-        }));
+        }, stamp));
     }
 
     await createKnowledgeLink(projectName, ids.slice(1).map((toId, i) => ({
@@ -255,7 +321,7 @@ async function listMemory(projectName: string, memoryType: string | null = null,
     let offset: string | number | null | undefined;
     do {
         const page = await client.scroll(collectionName, {
-            filter: { must: mustFilter },
+            filter: { must: mustFilter, must_not: [{ key: "type", match: { value: SETTINGS_TYPE } }] },
             limit: Math.max(limit, LIST_PAGE_SIZE),
             ...(offset != null ? { offset } : {}),
             with_payload: true,
@@ -267,56 +333,178 @@ async function listMemory(projectName: string, memoryType: string | null = null,
 
     return points
         .filter((point: any) => !String(point.payload?.content ?? "").startsWith(PLACEHOLDER_PREFIX))
-        .map((point: any) => ({
-            id: point.id,
-            score: 0,
-            content: point.payload?.content,
-            type: point.payload?.type,
-            timestamp: point.payload?.timestamp,
-            metadata: point.payload?.metadata ?? {}
-        }))
+        .map((point: any) => toQueryResult(point))
         .sort((a: QueryResult, b: QueryResult) => String(b.timestamp).localeCompare(String(a.timestamp)))
         .slice(0, limit);
 }
 
-async function updateMemory(projectName: string, memoryId: string, content?: string, metadata?: Record<string, any>): Promise<boolean> {
-    const collectionName = await initMemoryBank(projectName);
-
-    const pointId = toPointId(memoryId);
-    const existing = await client.retrieve(collectionName, { ids: [pointId], with_payload: true, with_vector: true });
-    if (existing.length === 0) {
-        throw new Error(`Memory ${memoryId} not found in project ${projectName}`);
-    }
-
-    const previous = existing[0];
-    const nextContent = content ?? String(previous.payload?.content ?? "");
-    const vector = content !== undefined
-        ? (await getCachedEmbeddings([content]))[0]
-        : previous.vector as number[];
-
-    const nextMetadata = metadata
-        ? { ...(previous.payload?.metadata as Record<string, any> ?? {}), ...metadata }
-        : previous.payload?.metadata ?? {};
-
-    await client.upsert(collectionName, {
-        wait: true,
-        points: [{
-            id: pointId,
-            vector,
-            payload: {
-                ...previous.payload,
-                content: nextContent,
-                metadata: nextMetadata,
-                timestamp: new Date().toISOString()
-            }
-        }]
-    });
-
-    cacheUtils.invalidateProjectCache(projectName);
-    return true;
+interface HiveQuery {
+    query_text?: string;
+    memory_type?: string;
+    metadata_filter?: Record<string, any>;
+    limit?: number;
+    heat?: number;
 }
 
-async function deleteMemory(projectName: string, memoryIds: string[]): Promise<number> {
+async function searchHive(caller: string, targets: string[], q: HiveQuery): Promise<QueryResult[]> {
+    const projects = [...new Set(targets)];
+    if (projects.length > MAX_HIVE_PROJECTS) {
+        throw new Error(`At most ${MAX_HIVE_PROJECTS} projects per call; pick the most relevant from memory_admin op=list_projects.`);
+    }
+    const limit = Math.min(q.limit ?? HIVE_DEFAULT_LIMIT, HIVE_MAX_LIMIT);
+    const minScore = (config.DISTANCE_METRIC || "Cosine") === "Cosine" ? minScoreForHeat(q.heat ?? DEFAULT_HEAT) : -Infinity;
+    const vector = q.query_text ? (await getCachedEmbeddings([q.query_text]))[0] : null;
+
+    const perProject = await Promise.all(projects.map(async (project): Promise<QueryResult[]> => {
+        if (project === caller) {
+            const own = q.query_text
+                ? await queryMemory(project, q.query_text, q.memory_type ?? null, limit, q.metadata_filter ?? null)
+                : await listMemory(project, q.memory_type ?? null, limit, q.metadata_filter ?? null);
+            return own.map(r => ({ ...r, project }));
+        }
+        if (!(await bankExists(project))) return [];
+        const visibility = await projectVisibility(project);
+        const extra = [
+            ...(q.memory_type ? [{ key: "type", match: { value: q.memory_type } }] : []),
+            ...metadataFilterClauses(q.metadata_filter ?? null)
+        ];
+        const filter = foreignFilter(project, visibility, extra);
+        if (vector) {
+            const { points } = await client.query(bankName(project), { query: vector, limit, filter, with_payload: true });
+            return points
+                .filter(hit => hit.score >= minScore && isVisibleToForeign(hit.payload, visibility))
+                .map(hit => toQueryResult(hit, project));
+        }
+        const page = await client.scroll(bankName(project), { filter, limit: Math.max(limit, LIST_PAGE_SIZE), with_payload: true, with_vector: false });
+        return page.points
+            .filter(point => isVisibleToForeign(point.payload, visibility))
+            .map(point => toQueryResult(point, project))
+            .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+    }));
+
+    const merged = perProject.flat();
+    return (vector
+        ? merged.sort((a, b) => b.score - a.score)
+        : merged.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
+    ).slice(0, limit);
+}
+
+async function createMemory(
+    caller: string,
+    target: string | undefined,
+    memoryType: MemoryType,
+    content: string,
+    id: string | null,
+    metadata: Record<string, any>,
+    isPrivate?: boolean
+): Promise<string[]> {
+    const project = target ?? caller;
+    const visibility = visibilityFromFlag(isPrivate);
+    if (project !== caller) {
+        if (!(await bankExists(project))) throw new Error(`Project ${project} not found or not shared`);
+        const effective = visibility ?? await projectVisibility(project);
+        if (effective !== "public") throw new Error(`Project ${project} not found or not shared`);
+        if (looksSecret(content)) throw new Error("Content looks like a secret; not written to another project");
+        if (id) {
+            const [existing] = await client.retrieve(bankName(project), { ids: [toPointId(id)], with_payload: false });
+            if (existing) throw new Error(`${id} already exists in ${project}; use memory_update with expected_version`);
+        }
+    }
+    return logMemoryChunked(project, memoryType, content, id, metadata, { writtenBy: caller, visibility });
+}
+
+async function updateMemory(projectName: string, memoryId: string, content?: string, metadata?: Record<string, any>, options: UpdateOptions = {}): Promise<{ version: number; private?: boolean }> {
+    const caller = options.caller ?? projectName;
+    const foreign = caller !== projectName;
+    const notFound = () => new Error(`Memory ${memoryId} not found in project ${projectName}`);
+
+    let visibilityDefault: Visibility = "public";
+    if (foreign) {
+        if (!(await bankExists(projectName))) throw notFound();
+        if (options.isPrivate !== undefined) throw new Error("Only the owning project can change an entry's visibility");
+        if (options.expectedVersion === undefined) {
+            throw new Error("expected_version is required when updating another project's entry; read the entry first and pass its version");
+        }
+        if (content !== undefined && looksSecret(content)) throw new Error("Content looks like a secret; not written to another project");
+        visibilityDefault = await projectVisibility(projectName);
+    }
+    const collectionName = foreign ? bankName(projectName) : await initMemoryBank(projectName);
+
+    const pointId = toPointId(memoryId);
+    const attempts = options.expectedVersion === undefined ? 3 : 1;
+    const vectorOfNewContent = content !== undefined ? (await getCachedEmbeddings([content]))[0] : null;
+
+    for (let attempt = 1; ; attempt++) {
+        const [previous] = await client.retrieve(collectionName, { ids: [pointId], with_payload: true, with_vector: true });
+        if (!previous || (foreign && !isVisibleToForeign(previous.payload, visibilityDefault))) throw notFound();
+
+        const previousPayload = previous.payload ?? {};
+        if (options.expectedVersion !== undefined && options.expectedVersion !== versionOf(previousPayload)) {
+            throw new Error(conflictMessage(memoryId, previousPayload));
+        }
+
+        const nextContent = content ?? String(previousPayload.content ?? "");
+        const vector = vectorOfNewContent ?? previous.vector as number[];
+        const nextMetadata = metadata
+            ? { ...(previousPayload.metadata as Record<string, any> ?? {}), ...metadata }
+            : previousPayload.metadata ?? {};
+
+        let visibility: Visibility | undefined = options.isPrivate !== undefined ? visibilityFromFlag(options.isPrivate) : previousPayload.visibility;
+        if (content !== undefined && looksSecret(content)) visibility = "private";
+
+        const token = uuidv4();
+        const { previous: _superseded, ...basePayload } = previousPayload;
+        const payload = {
+            ...basePayload,
+            content: nextContent,
+            metadata: nextMetadata,
+            timestamp: new Date().toISOString(),
+            version: versionOf(previousPayload) + 1,
+            written_by: caller,
+            written_by_session: SESSION_ID,
+            write_token: token,
+            ...(visibility ? { visibility } : {}),
+            ...(foreign ? { previous: snapshotOf(previousPayload) } : {})
+        };
+
+        if (foreign) await archiveSuperseded(projectName, pointId, previous.vector as number[], previousPayload);
+        await client.upsert(collectionName, {
+            wait: true,
+            update_mode: "update_only",
+            update_filter: casFilter(previousPayload),
+            points: [{ id: pointId, vector, payload }]
+        });
+
+        const [written] = await client.retrieve(collectionName, { ids: [pointId], with_payload: true });
+        if (!written) throw notFound();
+        if (written.payload?.write_token === token) {
+            cacheUtils.invalidateProjectCache(projectName);
+            return { version: payload.version, ...(visibility === "private" ? { private: true } : {}) };
+        }
+        if (attempt >= attempts) {
+            throw new Error(options.expectedVersion !== undefined
+                ? conflictMessage(memoryId, written.payload ?? {})
+                : `Could not update ${memoryId}: it kept changing. Re-read and retry.`);
+        }
+    }
+}
+
+async function deleteMemory(projectName: string, memoryIds: string[], caller: string = projectName): Promise<number> {
+    if (caller !== projectName) {
+        if (!(await bankExists(projectName))) return 0;
+        const visibility = await projectVisibility(projectName);
+        const records = await client.retrieve(bankName(projectName), { ids: memoryIds.map(toPointId), with_payload: true, with_vector: true });
+        const visible = records.filter(record => isVisibleToForeign(record.payload, visibility));
+        for (const record of visible) {
+            await archiveDeleted(projectName, caller, record.id, record.vector as number[], record.payload ?? {});
+        }
+        if (visible.length > 0) {
+            await client.delete(bankName(projectName), { wait: true, points: visible.map(record => record.id) });
+            cacheUtils.invalidateProjectCache(projectName);
+        }
+        return visible.length;
+    }
+
     const collectionName = await initMemoryBank(projectName);
 
     const existing = await client.retrieve(collectionName, { ids: memoryIds.map(toPointId), with_payload: false });
@@ -332,6 +520,7 @@ async function deleteMemory(projectName: string, memoryIds: string[]): Promise<n
 async function deleteCollection(projectName: string): Promise<boolean> {
     const collectionName = `memory_bank_${projectName}`;
     const result = await client.deleteCollection(collectionName);
+    await client.deleteCollection(archiveName(projectName)).catch(() => undefined);
     cacheUtils.invalidateProjectCache(projectName);
     return result;
 }
@@ -1103,6 +1292,9 @@ export {
     queryMemory,
     listMemory,
     logMemoryChunked,
+    searchHive,
+    createMemory,
+    toPointId,
     updateMemory,
     deleteMemory,
     deleteCollection,

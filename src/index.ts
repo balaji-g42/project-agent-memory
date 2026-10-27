@@ -12,7 +12,9 @@ import { dirname, join } from "path";
 import {
     queryMemory,
     listMemory,
-    logMemoryChunked,
+    searchHive,
+    createMemory,
+    toPointId,
     updateMemory,
     deleteMemory,
     deleteCollection,
@@ -31,6 +33,16 @@ import {
 import { summarizeText } from "./mcp_tools/summarizer.js";
 import { indexCodeGraph, queryCodeGraph, codeGraphStats } from "./mcp_tools/codeGraph.js";
 import { initMemoryBank } from "./init.js";
+import {
+    historyOf,
+    listArchive,
+    listProjects,
+    looksSecret,
+    purgeArchive,
+    restoreFromArchive,
+    setProjectVisibility,
+    upgradeProjects
+} from "./hive.js";
 
 process.on("unhandledRejection", (reason) => {
     console.error("UnhandledRejection:", reason);
@@ -73,44 +85,66 @@ function text(payload: unknown) {
     };
 }
 
+async function settleAll<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<Array<R | { error: string }>> {
+    const settled = await Promise.allSettled(items.map(run));
+    if (settled.every(s => s.status === "rejected")) throw (settled[0] as PromiseRejectedResult).reason;
+    return settled.map(s => s.status === "fulfilled"
+        ? s.value
+        : { error: s.reason instanceof Error ? s.reason.message : String(s.reason) });
+}
+
 server.registerTool('memory_create', {
     description: "Store one or more memory entries in a single call. Use memory_type to classify each: decisionLog for a choice plus rationale, progress for completed or blocked work, systemPatterns for a reusable rule, productContext/activeContext for project state, customData for verbatim documents. Use metadata for filterable fields such as status, priority or dataType.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
+        target_project: z.string().optional().describe("Other project to write to"),
         items: z.array(z.object({
             memory_type: memoryTypeSchema.describe("Memory type"),
             content: z.string().describe("Content to store"),
             id: z.string().optional().describe("Optional explicit id; overwrites an existing entry"),
-            metadata: z.record(z.any()).optional().describe("Filterable fields, e.g. { status: \"in_progress\", priority: \"high\" }")
+            metadata: z.record(z.any()).optional().describe("Filterable fields, e.g. { status: \"in_progress\", priority: \"high\" }"),
+            private: z.boolean().optional().describe("Hide from other projects")
         })).min(1).describe("One entry for a single write, many for a batch")
     })
 }, async (params) => {
-    const results = await Promise.all(params.items.map(item =>
-        logMemoryChunked(params.project_name, item.memory_type, item.content, item.id ?? null, item.metadata ?? {})
-    ));
-    return text(results.map((ids, i) => ({
-        id: ids[0],
-        type: params.items[i].memory_type,
-        ...(ids.length > 1 ? { chunk_ids: ids } : {})
-    })));
+    const results = await settleAll(params.items, async item => ({
+        item,
+        ids: await createMemory(params.project_name, params.target_project, item.memory_type, item.content, item.id ?? null, item.metadata ?? {}, item.private)
+    }));
+    return text(results.map(result => {
+        if ("error" in result) return result;
+        const { item, ids } = result;
+        return {
+            id: ids[0],
+            type: item.memory_type,
+            ...(ids.length > 1 ? { chunk_ids: ids } : {}),
+            ...(params.target_project && params.target_project !== params.project_name ? { project: params.target_project } : {}),
+            ...(looksSecret(item.content) ? { private: true, note: "Looks like a secret; marked private. Store secrets in a vault, not memory." } : {})
+        };
+    }));
 });
 
 server.registerTool('memory_read', {
     description: "Retrieve memory entries. Each query with query_text runs semantic search; without it, lists the most recent entries of the given type. metadata_filter narrows on fields stored via memory_create, with an array value matching any of its elements.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
+        target_project: z.array(z.string()).optional().describe("Other projects to search instead of your own (max 5)"),
         queries: z.array(z.object({
             query_text: z.string().optional().describe("Search text; omit to list by recency"),
             memory_type: memoryTypeSchema.optional().describe("Restrict to one memory type"),
             metadata_filter: z.record(z.any()).optional().describe("Metadata equality filter, e.g. { status: [\"pending\", \"blocked\"] }"),
-            limit: z.number().optional().default(5).describe("Maximum entries to return")
+            limit: z.number().optional().describe("Maximum entries to return"),
+            heat: z.number().int().min(1).max(10).optional().describe("Other projects only: 1 loose to 10 strict match")
         })).min(1).describe("One query for a single read, many for a batch")
     })
 }, async (params) => {
+    const targets = params.target_project;
     const results = await Promise.all(params.queries.map(q =>
-        q.query_text
-            ? queryMemory(params.project_name, q.query_text, q.memory_type ?? null, q.limit, q.metadata_filter ?? null)
-            : listMemory(params.project_name, q.memory_type ?? null, q.limit, q.metadata_filter ?? null)
+        targets?.length
+            ? searchHive(params.project_name, targets, q)
+            : q.query_text
+                ? queryMemory(params.project_name, q.query_text, q.memory_type ?? null, q.limit ?? 5, q.metadata_filter ?? null)
+                : listMemory(params.project_name, q.memory_type ?? null, q.limit ?? 5, q.metadata_filter ?? null)
     ));
     return text(results.length === 1 ? results[0] : results);
 });
@@ -119,28 +153,38 @@ server.registerTool('memory_update', {
     description: "Update existing memory entries by id. Content is re-embedded when supplied; metadata is shallow-merged into what is already stored.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
+        target_project: z.string().optional().describe("Other project that owns the entries"),
         items: z.array(z.object({
             id: z.string().describe("Id of the entry to update"),
             content: z.string().optional().describe("New content; omit to keep the existing content and vector"),
-            metadata: z.record(z.any()).optional().describe("Metadata fields to merge in")
+            metadata: z.record(z.any()).optional().describe("Metadata fields to merge in"),
+            expected_version: z.number().int().optional().describe("Version from your last read"),
+            private: z.boolean().optional().describe("Hide from other projects")
         })).min(1).describe("One entry for a single update, many for a batch")
     })
 }, async (params) => {
-    await Promise.all(params.items.map(item =>
-        updateMemory(params.project_name, item.id, item.content, item.metadata)
-    ));
-    return text(params.items.map(item => ({ id: item.id, updated: true })));
+    const results = await settleAll(params.items, async item => ({
+        id: item.id,
+        ...await updateMemory(params.target_project ?? params.project_name, item.id, item.content, item.metadata, {
+            caller: params.project_name,
+            expectedVersion: item.expected_version,
+            isPrivate: item.private
+        })
+    }));
+    return text(results.map(result => "error" in result ? result : { ...result, updated: true }));
 });
 
 server.registerTool('memory_delete', {
-    description: "Permanently delete memory entries by id.",
+    description: "Delete memory entries by id. Your own entries are deleted permanently; another project's entries are archived and can be restored by their owner.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
+        target_project: z.string().optional().describe("Other project that owns the entries"),
         ids: z.array(z.string()).min(1).describe("Ids of entries to delete")
     })
 }, async (params) => {
-    const deleted = await deleteMemory(params.project_name, params.ids);
-    return text({ deleted });
+    const foreign = params.target_project !== undefined && params.target_project !== params.project_name;
+    const deleted = await deleteMemory(params.target_project ?? params.project_name, params.ids, params.project_name);
+    return text({ deleted, ...(foreign ? { archived: true } : {}) });
 });
 
 server.registerTool('memory_context', {
@@ -214,15 +258,34 @@ server.registerTool('memory_graph', {
 });
 
 server.registerTool('memory_admin', {
-    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it, op=delete_collection permanently deletes the entire memory bank for a project.",
+    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it, op=delete_collection permanently deletes the entire memory bank for a project. op=list_projects lists other projects you can read; op=set_visibility sets this project's default; op=list_archive, restore, purge and history manage entries other projects deleted or edited here.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
-        op: z.enum(["export", "import", "summarize", "delete_collection"]).describe("Admin operation"),
+        op: z.enum(["export", "import", "summarize", "delete_collection", "list_projects", "set_visibility", "list_archive", "restore", "purge", "history"]).describe("Admin operation"),
         memory_types: z.array(memoryTypeSchema).optional().describe("op=export: types to include; defaults to the structured contexts, decisions and progress"),
         markdown: z.string().optional().describe("op=import: markdown in this server's export format"),
-        content: z.string().optional().describe("op=summarize: text to condense")
+        content: z.string().optional().describe("op=summarize: text to condense"),
+        ids: z.array(z.string()).optional().describe("op=restore, purge, history: entry ids"),
+        visibility: z.enum(["public", "private"]).optional().describe("op=set_visibility: project default")
     })
 }, async (params) => {
+    if (params.op === "list_projects") {
+        return text(await listProjects(params.project_name));
+    }
+    if (params.op === "set_visibility") {
+        if (!params.visibility) throw new Error("op=set_visibility requires visibility");
+        return text({ visibility: await setProjectVisibility(params.project_name, params.visibility) });
+    }
+    if (params.op === "list_archive") {
+        return text(await listArchive(params.project_name));
+    }
+    if (params.op === "restore" || params.op === "purge" || params.op === "history") {
+        if (!params.ids?.length) throw new Error(`op=${params.op} requires ids`);
+        const ids = params.ids.map(toPointId);
+        if (params.op === "restore") return text(await restoreFromArchive(params.project_name, ids));
+        if (params.op === "purge") return text({ purged: await purgeArchive(params.project_name, ids) });
+        return text(await historyOf(params.project_name, ids[0]));
+    }
     if (params.op === "export") {
         return text(await exportMemoryToMarkdown(params.project_name, params.memory_types ?? null));
     }
@@ -267,6 +330,7 @@ async function main() {
     try {
         await server.connect(transport);
         console.error("Project Agent Memory server running on stdio");
+        upgradeProjects().catch(err => console.error("Hive upgrade skipped:", err instanceof Error ? err.message : err));
     } catch (error) {
         const err = error as Error;
         console.error("Error connecting server:", err.stack || err);
