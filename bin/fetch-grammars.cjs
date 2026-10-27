@@ -9,11 +9,11 @@ const dir = path.join(__dirname, "..", "grammars");
 async function main() {
   const res = await fetch(RELEASE, { headers: { Accept: "application/vnd.github+json" } });
   if (!res.ok) throw new Error(`release ${TAG}: HTTP ${res.status}`);
-  const assets = (await res.json()).assets.filter((a) => a.name.endsWith(".wasm"));
+  const assets = (await res.json()).assets.filter((a) => /^[A-Za-z0-9._-]+\.wasm$/.test(a.name) && !a.name.includes(".."));
   if (assets.length === 0) throw new Error(`release ${TAG} has no .wasm assets`);
   fs.mkdirSync(dir, { recursive: true });
   for (const asset of assets) {
-    const file = path.join(dir, asset.name);
+    const file = path.join(dir, path.basename(asset.name));
     if (fs.existsSync(file) && fs.statSync(file).size === asset.size) continue;
     const dl = await fetch(asset.browser_download_url);
     if (!dl.ok) throw new Error(`${asset.name}: HTTP ${dl.status}`);
