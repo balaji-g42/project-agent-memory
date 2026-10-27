@@ -102,7 +102,7 @@ Re-embeds when `content` is supplied; omit it to change only `metadata`, which i
 
 ### memory_delete
 
-Permanent, no undo.
+Your own project: permanent, no undo. Another project (`target_project`): the entry is archived, not destroyed - its owner can restore it.
 
 ```json
 { "project_name": "my-app", "ids": ["3f2a...", "9c11..."] }
@@ -132,7 +132,7 @@ Relate entries to each other and walk those relations. Use it when the connectio
 { "project_name": "my-app", "op": "export" }
 ```
 
-`export` dumps the bank as markdown, `import` (with `markdown`) reads that same format back, `summarize` (with `content`) condenses a long text before you store it, `delete_collection` permanently deletes the whole memory bank for a project.
+`export` dumps the bank as markdown, `import` (with `markdown`) reads that same format back, `summarize` (with `content`) condenses a long text before you store it, `delete_collection` permanently deletes the whole memory bank (and its archive) for a project. Hive ops: `list_projects`, `set_visibility`, `list_archive`, `restore`, `purge`, `history` - see Hive memory below.
 
 ## Working pattern
 
@@ -142,6 +142,29 @@ Relate entries to each other and walk those relations. Use it when the connectio
 4. Focus changed: `memory_context` with `active_context`.
 
 Keep writes small - one idea per entry. A progress entry is at most five lines: commit id, scope, verification, push status, what is still open. Incident detail belongs in a `systemPatterns` entry, not in progress.
+
+## Self-correction and learning
+
+- When you are corrected, or a fix fails and you change course, write the lesson at once as a `systemPatterns` entry: `SYMPTOM -> CAUSE -> FIX`. Add a `decisionLog` entry for the mistake itself.
+- Before writing a pattern, `memory_read` for it. If it exists, `memory_update` it (add the new symptom or evidence) instead of creating a duplicate.
+- A mistake you or another agent has made twice is a repeated mistake: store it as a pattern with `metadata: { "repeated": true }`, state the rule as an imperative, and check it before doing similar work.
+- Before starting a task, search the symptom or task wording. If a stored pattern contradicts what you were about to do, follow the pattern and say so.
+- A pattern that turns out wrong or stale: update it (`Superseded: ...`), do not leave it standing.
+- Record what happened and what fixed it, never secrets or credentials.
+
+## Hive memory (other projects)
+
+Every project's memory is public to other agents unless marked private. Use it to reuse what another project already learned, and to leave notes in it.
+
+- Discover: `memory_admin` `op: "list_projects"` lists the projects you can see.
+- Search: `memory_read` with `target_project: ["other-app"]` (max 5 projects, no wildcard). Retrieval only: results are never injected into context for you, and each carries its source `project`. Default `limit` is 3, maximum 10.
+- `heat` (integer 1-10, per query): 10 is strict, only close matches; 1 is lenient, loose matches too. Default 5. Raise it when results look off-topic, lower it when nothing comes back.
+- Write: `memory_create`, `memory_update`, `memory_delete` accept `target_project` (a single project). Creating needs a project that is shared. Entries you write there are stamped with your project and session.
+- Update another project's entry: pass `expected_version` (from the `version` you read). A mismatch returns a conflict naming the current version: re-read, merge, retry. The old version is kept for the owner as `previous` and in `history`.
+- Delete another project's entry: it is archived. The owner restores it with `memory_admin` `op: "restore"`, or removes it with `op: "purge"`. Use `list_archive` and `history` (with `ids`) to inspect.
+- Privacy: set `private: true` on a `memory_create`/`memory_update` item to hide it from other projects. `memory_admin` `op: "set_visibility"` with `visibility: "private"|"public"` sets the project default; an entry's own `private` flag wins over it. Only the owning project can change visibility. To mark many entries, send an array of items.
+- Secrets: never store secrets, tokens, passwords or keys in memory; keep them in a vault. Mark anything sensitive `private`. If you find a secret already stored, mark that entry `private` and tell the user. A scan auto-marks obvious secrets private, but it is only a backstop and misses some.
+- Your own agent always sees everything in its own project, private or not.
 
 ## Configuration
 

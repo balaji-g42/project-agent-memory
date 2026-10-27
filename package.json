@@ -1,7 +1,7 @@
 {
   "name": "project-agent-memory",
-  "version": "3.3.0",
-  "publishedVersion": "3.3.0",
+  "version": "3.4.0",
+  "publishedVersion": "3.4.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

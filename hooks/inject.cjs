@@ -160,6 +160,10 @@ RULES:
   2. Focus changed: memory_context with active_context to patch it.
   3. Finding code: code_graph op=query (symbol, callers, callees) before Grep or Glob.
   4. If the memory tools are unavailable: say so in one line and continue without persistence.
+  5. Repeated mistakes: memory_read the pattern first, update it with metadata repeated=true
+     instead of duplicating, and check it before similar work.
+  6. Other projects: memory_admin list_projects, then memory_read with target_project (see skill).
+     Never store secrets; mark sensitive entries private.
 
 These tools are deferred - fetch each tool's schema with ToolSearch before the first call this
 session, then use the parameter names it returns. Keep writes small: one idea per entry. A

@@ -24,7 +24,7 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 ### One command (recommended)
 
 ```bash
-npx -y project-agent-memory@3.3.0 setup
+npx -y project-agent-memory@3.4.0 setup
 ```
 
 It asks for anything not given as a flag, then:
@@ -109,7 +109,7 @@ node dist/index.js
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.3.0"],
+      "args": ["-y", "project-agent-memory@3.4.0"],
       "env": {
         "QDRANT_URL": "http://localhost:6333"
       }
@@ -237,17 +237,17 @@ All eight take `project_name` (case-sensitive; it selects the `memory_bank_<proj
 The four CRUD tools take arrays, so a single write and a batch write use the same call shape - send one element or many.
 
 ### memory_create
-Store entries. `project_name`, `items[]` of `{ memory_type, content, id?, metadata? }` (min 1). `metadata` holds filterable fields such as `status`, `priority` or `dataType`. Returns `[{ id, type }]`.
+Store entries. `project_name`, `items[]` of `{ memory_type, content, id?, metadata?, private? }` (min 1), optional `target_project`. `metadata` holds filterable fields such as `status`, `priority` or `dataType`. Returns `[{ id, type, version }]`.
 
 ### memory_read
-Retrieve entries. `project_name`, `queries[]` of `{ query_text?, memory_type?, metadata_filter?, limit? }` (min 1, `limit` default 5).
+Retrieve entries. `project_name`, `queries[]` of `{ query_text?, memory_type?, metadata_filter?, limit?, heat? }` (min 1, `limit` default 5), optional `target_project` (array, max 5) to search other projects' public memory: default `limit` 3, max 10, `heat` 1-10 (10 strict, 1 lenient, default 5), results tagged with their `project`.
 With `query_text` a query is a semantic search; without it, a recency-ordered listing that embeds nothing. `metadata_filter` matches on the fields stored by `memory_create`; an array value matches any of its elements. A single query returns `[{ id, score, content, type, timestamp, metadata }]`; several return one such array per query.
 
 ### memory_update
-Update entries by id. `project_name`, `items[]` of `{ id, content?, metadata? }` (min 1). Content is re-embedded when supplied; omitting it keeps the stored vector. `metadata` is shallow-merged. Returns `[{ id, updated }]`.
+Update entries by id. `project_name`, `items[]` of `{ id, content?, metadata?, private?, expected_version? }` (min 1), optional `target_project`. Content is re-embedded when supplied; omitting it keeps the stored vector. `metadata` is shallow-merged. Another project's entry requires `expected_version`; a stale one returns a conflict. Returns `[{ id, updated, version }]`.
 
 ### memory_delete
-Permanently delete entries. `project_name`, `ids` (array, min 1). Returns `{ deleted }`.
+Delete entries. `project_name`, `ids` (array, min 1), optional `target_project`. Your own project: permanent. Another project: archived, restorable by its owner. Returns `{ deleted }`.
 
 ### memory_context
 Read, and optionally patch, the project's working state. `project_name`, optional `product_context`, optional `active_context`, `pattern_limit` (default 20). Patches are shallow-merged and the previous version is written to `contextHistory`; reads happen after writes. Initializes the workspace when product context is empty.
@@ -265,9 +265,15 @@ Edges are stored in the same collection as ordinary points of type `knowledgeLin
 - `export` - optional `memory_types`. Returns the memory bank as markdown.
 - `import` - `markdown` in this server's own export format. Returns `{ imported, errors, timestamp }`.
 - `summarize` - `content`. Returns a condensed version, for shrinking a long text before storing it.
-- `delete_collection` - permanently deletes the entire memory bank (collection and all its points) for `project_name`. No confirmation step - irreversible.
+- `list_projects` - the other projects whose memory you can see.
+- `set_visibility` - `visibility` `public` | `private`, the project default (an entry's own `private` flag wins).
+- `list_archive` / `history` / `restore` / `purge` - inspect and manage archived and superseded entries (`ids` for the last three).
+- `delete_collection` - permanently deletes the entire memory bank (collection, archive and all its points) for `project_name`. No confirmation step - irreversible.
 
 Full parameter tables and return shapes: [`skill/API-REFERENCE.md`](skill/API-REFERENCE.md).
+
+### Hive memory
+Memory is public to other projects by default; mark entries or a whole project `private`. Entry flag beats project default beats public, evaluated at read time. Cross-project search is retrieval only. Foreign writes are versioned (`expected_version`) and the previous version is kept; foreign deletes are archived. On upgrade, every existing project gets a public settings point automatically at server start; `project-agent-memory-cli upgrade --all [--dry-run] [--private a,b]` does it on demand. Never store secrets in memory; a regex scan marks obvious ones private as a backstop.
 
 ### code_graph
 Code index graph, stored in its own `code_graph_<project_name>` collection, separate from the memory bank. `project_name`, `op`:
@@ -319,7 +325,7 @@ Local (embeddings computed on this machine, Qdrant on localhost):
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.3.0"],
+      "args": ["-y", "project-agent-memory@3.4.0"],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
         "VECTOR_DIM": "768",
@@ -338,7 +344,7 @@ Self-hosted / cloud Qdrant (remote instance, API key, embeddings still local):
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.3.0"],
+      "args": ["-y", "project-agent-memory@3.4.0"],
       "env": {
         "MEMORY_BACKEND": "qdrant",
         "QDRANT_URL": "https://qdrant.example.com",
@@ -392,7 +398,7 @@ Drop `--dry-run` once the reported counts look right. Use `--all` instead of `--
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.3.0"],
+      "args": ["-y", "project-agent-memory@3.4.0"],
       "env": {
         "MEMORY_BACKEND": "postgres",
         "PREST_URL": "http://localhost:3000",
@@ -415,7 +421,7 @@ Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens 
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.3.0"],
+      "args": ["-y", "project-agent-memory@3.4.0"],
       "env": {
         "MEMORY_BACKEND": "postgres",
         "PREST_URL": "https://prest.example.com",

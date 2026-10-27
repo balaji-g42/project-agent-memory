@@ -20,8 +20,10 @@ Store one or more memory entries.
 | `items[].content` | string | yes | - | Content to store |
 | `items[].id` | string | no | generated | Explicit point id; overwrites an existing entry |
 | `items[].metadata` | object | no | `{}` | Filterable fields, e.g. `{ "status": "in_progress" }` |
+| `items[].private` | boolean | no | inherit | Hide from other projects; wins over the project default |
+| `target_project` | string | no | - | Write into another (shared) project; it must exist |
 
-Returns an array of `{ "id": string, "type": string }`, one per item, in order.
+Returns an array of `{ "id": string, "type": string, "version": number }`, one per item, in order. Content that looks like a secret is stored `private` and flagged.
 
 Each content is embedded and stored as a single point with payload `{ type, content, metadata, timestamp, project }`. Long content is chunked and the chunk embeddings are averaged; the payload keeps the full original text.
 
@@ -38,7 +40,9 @@ Retrieve entries. Each query has two modes.
 | `queries[].query_text` | string | no | - | Present: semantic search. Absent: list by recency |
 | `queries[].memory_type` | enum | no | all types | Restrict to one type |
 | `queries[].metadata_filter` | object | no | - | Equality filter on `metadata`; an array value matches any element |
-| `queries[].limit` | number | no | 5 | Maximum entries |
+| `queries[].limit` | number | no | 5 (3 with `target_project`, max 10) | Maximum entries |
+| `queries[].heat` | integer 1-10 | no | 5 | With `target_project`: 10 strict, 1 lenient (minimum score 0.75 down to 0.30, cosine only) |
+| `target_project` | string[] | no | - | Search other projects' public memory; max 5, no wildcard. Results carry `project` and are retrieval only |
 
 One query returns an array of `{ id, score, content, type, timestamp, metadata }`. Several queries return one such array per query, in order.
 
@@ -59,19 +63,23 @@ Update entries by id. Supplying `content` re-embeds the entry; omitting it keeps
 | `items[].id` | string | yes | Id of the entry to update |
 | `items[].content` | string | no | New content |
 | `items[].metadata` | object | no | Metadata fields to merge in |
+| `items[].private` | boolean | no | Own project only: change the entry's visibility |
+| `items[].expected_version` | number | foreign | Version you read; required with `target_project`, a mismatch returns a conflict |
+| `target_project` | string | no | Update an entry in another project; its previous version is archived and kept inline as `previous` |
 
-Returns an array of `{ "id": string, "updated": true }`. Throws if an id does not exist in that project's collection.
+Returns an array of `{ "id": string, "updated": true, "version": number }`. Throws if an id does not exist in that project's collection.
 
 ---
 
 ## memory_delete
 
-Permanently delete entries by id. No undo.
+Delete entries by id. Own project: permanent, no undo. With `target_project`: archived instead; the owner restores or purges.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project_name` | string | yes | Project name |
 | `ids` | string[] | yes | At least one id |
+| `target_project` | string | no | Delete in another project (archives) |
 
 Returns `{ "deleted": number }` - the count of ids that existed and were removed. Unknown ids are ignored rather than raising.
 
@@ -134,12 +142,14 @@ Edges are stored in the same collection as ordinary points with `type = "knowled
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project_name` | string | yes | Project name |
-| `op` | enum | yes | `export`, `import`, `summarize` or `delete_collection` |
+| `op` | enum | yes | `export`, `import`, `summarize`, `delete_collection`, `list_projects`, `set_visibility`, `list_archive`, `restore`, `purge` or `history` |
+| `ids` | string[] | `restore`, `purge`, `history` | Entry ids |
+| `visibility` | enum | `op=set_visibility` | `public` or `private`: the project default |
 | `memory_types` | enum[] | no | `op=export`: types to include; defaults to the structured contexts, decisions and progress |
 | `markdown` | string | `op=import` | Markdown in this server's own export format |
 | `content` | string | `op=summarize` | Text to condense |
 
-`export` returns the memory bank as a markdown string. `import` returns `{ imported, errors, timestamp }` and only accepts the format `export` produces. `summarize` returns the condensed text and uses the configured `SUMMARIZER_PROVIDER`, so it needs that provider's API key. `delete_collection` permanently deletes the entire memory bank (collection and all points) for `project_name` and returns `{ deleted: true }` - irreversible, no other params.
+`export` returns the memory bank as a markdown string. `import` returns `{ imported, errors, timestamp }` and only accepts the format `export` produces. `summarize` returns the condensed text and uses the configured `SUMMARIZER_PROVIDER`, so it needs that provider's API key. `list_projects` lists other projects whose memory is visible. `list_archive` returns this project's archived entries; `restore` moves them back; `purge` removes them for good; `history` returns superseded versions. `delete_collection` permanently deletes the entire memory bank (collection, archive and all points) for `project_name` and returns `{ deleted: true }` - irreversible, no other params.
 
 ---
 

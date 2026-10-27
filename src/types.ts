@@ -42,7 +42,9 @@ export interface QdrantPoint {
     payload: Record<string, any>;
 }
 
-export type VectorFilter = { must?: Array<{ key: string; match: { value?: any; any?: any[] } }> } | null | undefined;
+type FilterClause = { key: string; match: { value?: any; any?: any[] } };
+
+export type VectorFilter = { must?: FilterClause[]; must_not?: FilterClause[] } | null | undefined;
 
 export interface VectorPoint {
     id: string | number;
@@ -55,7 +57,10 @@ export interface VectorClient {
     getCollection(name: string): Promise<any>;
     createCollection(name: string, options: { vectors: { size: number; distance: string } }): Promise<any>;
     deleteCollection(name: string): Promise<any>;
-    upsert(name: string, options: { wait?: boolean; points: VectorPoint[] }): Promise<any>;
+    upsert(
+        name: string,
+        options: { wait?: boolean; points: VectorPoint[]; update_mode?: "upsert" | "insert_only" | "update_only"; update_filter?: VectorFilter }
+    ): Promise<any>;
     retrieve(
         name: string,
         options: { ids: Array<string | number>; with_payload?: boolean; with_vector?: boolean }

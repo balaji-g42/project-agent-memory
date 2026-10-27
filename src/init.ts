@@ -3,7 +3,8 @@ import { QdrantClient } from "@qdrant/js-client-rest";
 import { v4 as uuidv4 } from "uuid";
 import config from "./config.js";
 import { PrestVectorClient } from "./backends/prest.js";
-import type { MemoryType, VectorClient } from "./types.js";
+import type { MemoryType, VectorClient, VectorPoint } from "./types.js";
+import { SCHEMA_VERSION, SETTINGS_TYPE, settingsPointId } from "./hiveConstants.js";
 
 const MEMORY_TYPES: MemoryType[] = [
     "productContext", 
@@ -75,7 +76,7 @@ async function initMemoryBank(projectName: string): Promise<string> {
         });
 
         // Insert placeholder points for each memory type
-        const points = MEMORY_TYPES.map(memType => ({
+        const points: VectorPoint[] = MEMORY_TYPES.map(memType => ({
             id: uuidv4(),
             vector: Array(config.VECTOR_DIM).fill(0),
             payload: {
@@ -85,6 +86,18 @@ async function initMemoryBank(projectName: string): Promise<string> {
                 project: projectName,
             }
         }));
+        points.push({
+            id: settingsPointId(projectName),
+            vector: Array(config.VECTOR_DIM).fill(0),
+            payload: {
+                type: SETTINGS_TYPE,
+                content: "Project settings",
+                visibility: "public",
+                schema_version: SCHEMA_VERSION,
+                timestamp: new Date().toISOString(),
+                project: projectName,
+            }
+        });
 
         await client.upsert(collectionName, { wait: true, points });
     }

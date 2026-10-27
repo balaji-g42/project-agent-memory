@@ -160,10 +160,10 @@ class PrestVectorClient implements VectorClient {
                 val jsonb;
                 matched boolean;
             BEGIN
-                IF p_filter IS NULL OR p_filter->'must' IS NULL THEN
+                IF p_filter IS NULL THEN
                     RETURN true;
                 END IF;
-                FOR clause IN SELECT * FROM jsonb_array_elements(p_filter->'must') LOOP
+                FOR clause IN SELECT * FROM jsonb_array_elements(COALESCE(p_filter->'must', '[]'::jsonb)) LOOP
                     path_arr := string_to_array(clause->>'key', '.');
                     values_arr := COALESCE(clause->'match'->'any', jsonb_build_array(clause->'match'->'value'));
                     matched := false;
@@ -176,6 +176,15 @@ class PrestVectorClient implements VectorClient {
                     IF NOT matched THEN
                         RETURN false;
                     END IF;
+                END LOOP;
+                FOR clause IN SELECT * FROM jsonb_array_elements(COALESCE(p_filter->'must_not', '[]'::jsonb)) LOOP
+                    path_arr := string_to_array(clause->>'key', '.');
+                    values_arr := COALESCE(clause->'match'->'any', jsonb_build_array(clause->'match'->'value'));
+                    FOR val IN SELECT * FROM jsonb_array_elements(values_arr) LOOP
+                        IF (p_payload #> path_arr) @> val THEN
+                            RETURN false;
+                        END IF;
+                    END LOOP;
                 END LOOP;
                 RETURN true;
             END;
@@ -272,6 +281,32 @@ class PrestVectorClient implements VectorClient {
         );
         await registerPrestQuery(
             "memory",
+            "upsert_point_insert_only",
+            "SELECT 1",
+            `INSERT INTO memory_points (collection, id, payload, embedding)
+             VALUES ({{sqlVal "collection"}}, {{sqlVal "id"}}, {{sqlVal "payload"}}::jsonb, ('[' || replace({{sqlVal "header.X-Vector"}}, ' ', ',') || ']')::vector)
+             ON CONFLICT (collection, id) DO NOTHING`
+        );
+        await registerPrestQuery(
+            "memory",
+            "update_point",
+            "SELECT 1",
+            `UPDATE memory_points
+             SET payload = {{sqlVal "payload"}}::jsonb, embedding = ('[' || replace({{sqlVal "header.X-Vector"}}, ' ', ',') || ']')::vector, updated_at = now()
+             WHERE collection = {{sqlVal "collection"}} AND id = {{sqlVal "id"}}
+             {{if isSet "filter_json"}} AND memory_filter_match(payload, {{sqlVal "filter_json"}}::jsonb) {{end}}`
+        );
+        await registerPrestQuery(
+            "memory",
+            "update_point_chunk_start",
+            "SELECT 1",
+            `UPDATE memory_points
+             SET payload = jsonb_build_object('_chunked', ${CHUNK_SQL}), embedding = ('[' || replace({{sqlVal "header.X-Vector"}}, ' ', ',') || ']')::vector, updated_at = now()
+             WHERE collection = {{sqlVal "collection"}} AND id = {{sqlVal "id"}}
+             {{if isSet "filter_json"}} AND memory_filter_match(payload, {{sqlVal "filter_json"}}::jsonb) {{end}}`
+        );
+        await registerPrestQuery(
+            "memory",
             "append_point_chunk",
             "SELECT 1",
             `UPDATE memory_points SET payload = jsonb_build_object('_chunked', (payload->>'_chunked') || ${CHUNK_SQL})
@@ -331,22 +366,33 @@ class PrestVectorClient implements VectorClient {
         return true;
     }
 
-    async upsert(name: string, options: { wait?: boolean; points: Point[] }): Promise<any> {
+    async upsert(
+        name: string,
+        options: { wait?: boolean; points: Point[]; update_mode?: "upsert" | "insert_only" | "update_only"; update_filter?: Filter }
+    ): Promise<any> {
         await this.ensureSchema();
+        const mode = options.update_mode ?? "upsert";
+        const filter_json = options.update_filter ? JSON.stringify(options.update_filter) : undefined;
+        const queries = mode === "update_only"
+            ? { single: "update_point", start: "update_point_chunk_start" }
+            : mode === "insert_only"
+                ? { single: "upsert_point_insert_only", start: null }
+                : { single: "upsert_point", start: "upsert_point_chunk_start" };
         for (const point of options.points) {
-            const key = { collection: name, id: String(point.id) };
+            const key = { collection: name, id: String(point.id), filter_json };
             const vector = { "X-Vector": toVectorHeaderValue(point.vector) };
             const payload = JSON.stringify(point.payload ?? {});
             if (encodedLength(payload) <= MAX_PARAM_CHARS) {
-                await execWrite("memory", "upsert_point", { ...key, payload }, vector);
+                await execWrite("memory", queries.single, { ...key, payload }, vector);
                 continue;
             }
+            if (!queries.start) throw new Error("insert_only upserts must fit in a single request");
             const [first, ...rest] = splitForUrl(payload, MAX_PARAM_CHARS);
-            await execWrite("memory", "upsert_point_chunk_start", { ...key, chunk: `x${first}x` }, vector);
+            await execWrite("memory", queries.start, { ...key, chunk: `x${first}x` }, vector);
             for (const chunk of rest) {
-                await execWrite("memory", "append_point_chunk", { ...key, chunk: `x${chunk}x` });
+                await execWrite("memory", "append_point_chunk", { collection: name, id: key.id, chunk: `x${chunk}x` });
             }
-            await execWrite("memory", "finish_point_chunks", key);
+            await execWrite("memory", "finish_point_chunks", { collection: name, id: key.id });
         }
         return { status: "completed" };
     }

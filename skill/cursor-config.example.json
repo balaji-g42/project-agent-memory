@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "project-agent-memory@3.3.0"
+        "project-agent-memory@3.4.0"
       ],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
