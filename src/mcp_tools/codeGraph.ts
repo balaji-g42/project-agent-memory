@@ -63,7 +63,7 @@ function toRelativePath(root: string, file: string): string {
 }
 
 function nodeHash(node: Omit<CodeNode, "hash">): string {
-    return createHash("sha1").update(JSON.stringify(node)).digest("hex");
+    return createHash("sha256").update(JSON.stringify(node)).digest("hex");
 }
 
 function parseGraph(raw: any, root: string): CodeNode[] {
