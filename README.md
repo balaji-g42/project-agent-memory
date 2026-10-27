@@ -6,6 +6,7 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 
 - **8 MCP tools**: `memory_create`, `memory_read`, `memory_update`, `memory_delete`, `memory_context`, `memory_graph`, `memory_admin`, `code_graph`
 - **Dual storage backend**: `MEMORY_BACKEND=qdrant` (default) or `MEMORY_BACKEND=postgres`, same tool surface either way - no code change to switch, and Qdrant deployments need no env changes to keep working. The `postgres` backend talks to Postgres/pgvector through a [pREST](https://prest.dev) instance, not a direct DB connection - vectors travel over an `X-Vector` header (registered pREST queries can't carry them as URL params without hitting HTTP 414)
+- **Hive memory**: any agent can browse, search and write other projects' memory. Public by default, with entry-level and project-level `private`; versioned writes, archived deletes. Works identically on both backends. See [Hive memory](#hive-memory)
 - **Local embeddings by default**: ONNX CPU inference in-process via `@huggingface/transformers`; no embedding service, no API key, nothing leaves the machine except the backend writes
 - **Configurable vector dimension**: `VECTOR_DIM` (default 768), Matryoshka-truncated and re-normalized
 - **Pluggable providers**: `onnx`, `openai` (any OpenAI-compatible endpoint - Ollama, LM Studio, vLLM, LiteLLM, OpenAI itself), `gemini`, `openrouter`
@@ -462,6 +463,10 @@ node skill/migrate-qdrant-to-pgvector.mjs --project project-agent-memory \
 
 Source vectors of any dimension are supported: if the Qdrant collection's vector size differs from the target `VECTOR_DIM`, the script truncates and re-normalizes (Matryoshka-style, same as the embedding layer) when the source is larger, and refuses with a clear error rather than padding when the source is smaller. Run with `--help` for the full flag list, including `--dry-run`.
 
+## Upgrading to 3.4.0
+
+Nothing to run. On start the server adds a public settings point to every existing project; entries are not rewritten, and entries without a `visibility` flag inherit the project default (public). Existing memory therefore becomes visible to other projects: review old entries for anything sensitive and mark it `private` before upgrading, or run `project-agent-memory-cli upgrade --all --private a,b` to make chosen projects private first. Qdrant needs a server that supports filtered upserts (`update_filter`, tested on 1.19.1).
+
 ## Testing
 
 Interactive:
@@ -472,6 +477,15 @@ npx @modelcontextprotocol/inspector node dist/index.js
 ```
 
 Opens http://localhost:6274.
+
+Test suite (needs a reachable backend; the suites spawn `dist/index.js`, so build first). Run it through the npm script, which sets the ESM flag; plain `npx jest` fails on `import.meta`:
+
+```bash
+npm run build
+npm test
+```
+
+`tests/hive.test.ts` covers cross-project access and runs on either backend (`MEMORY_BACKEND=qdrant QDRANT_URL=...` or `postgres` with `PREST_URL`).
 
 Smoke test over stdio:
 
@@ -488,36 +502,39 @@ printf '%s\n' \
 ```
 project-agent-memory/
 ├── src/
-│   ├── index.ts              # MCP server entry point, 7 tool registrations
+│   ├── index.ts              # MCP server entry point, tool registrations, startup upgrade
+│   ├── bin.ts, cli.ts        # npx entry, CLI (recall, context, index, stats, migrate, upgrade)
+│   ├── setup.ts              # `setup` command: installs hooks and skill into ~/.claude
+│   ├── migrate.ts            # v2 -> v3 migration
 │   ├── config.ts             # Environment configuration and VECTOR_DIM validation
-│   ├── init.ts               # Collection creation and dimension guard
+│   ├── init.ts               # Collection creation, dimension guard, settings point
+│   ├── hive.ts               # Hive memory: visibility, versioning (CAS), archive, restore, history, upgrade
+│   ├── hiveConstants.ts      # Limits (5 projects, top-k 3/10, heat), session id, ids
 │   ├── cache.ts              # LRU caches and invalidation
-│   ├── constants.ts
-│   ├── types.ts
-│   ├── utils.ts
+│   ├── constants.ts, types.ts, utils.ts
 │   ├── embeddings.ts         # Provider factory
-│   ├── embeddings/
-│   │   ├── providerBase.ts   # Abstract base class
-│   │   ├── onnx.ts           # In-process ONNX inference
-│   │   ├── openaiCompatible.ts
-│   │   ├── geminiVertex.ts
-│   │   └── openrouter.ts
+│   ├── embeddings/           # onnx, openaiCompatible, geminiVertex, openrouter, providerBase
 │   ├── backends/
-│   │   └── postgres.ts       # Qdrant-API-shaped shim over pg + pgvector
+│   │   ├── prest.ts          # Qdrant-client-shaped shim over Postgres/pgvector via pREST
+│   │   └── postgres.ts
+│   ├── codegraph/            # tree-sitter extraction and per-language queries
 │   └── mcp_tools/
 │       ├── memoryBankTools.ts
+│       ├── codeGraph.ts
 │       └── summarizer.ts
+├── bin/                      # server.cjs launcher, grammar fetch, version sync
 ├── dist/                     # Compiled output (generated)
-├── tests/
-├── skill/                    # Claude Agent Skill, incl. the Qdrant->Postgres migration script
+├── tests/                    # Jest suites (all-tools, hive, setup, code-graph, hooks, cache, chunking)
+├── skill/                    # Claude Agent Skill, API reference, Qdrant->Postgres migration script
 ├── .claude-plugin/
-│   └── plugin.json           # Plugin manifest (name, skill path)
+│   └── plugin.json           # Plugin manifest (name, skill path, MCP server)
 ├── hooks/
-│   ├── hooks.json             # SessionStart / PostToolUse / Stop wiring
-│   └── inject.cjs             # Context injection, prompt recall, code-graph reindex, commit auto-logging + Stop hard-block
+│   ├── hooks.json            # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Stop wiring
+│   └── inject.cjs            # Context injection, prompt recall, code-graph reindex, commit auto-logging + Stop hard-block
 ├── commands/
-│   └── memory-sync.md         # /memory-sync
-├── .mcp.json                  # Plugin's bundled MCP server registration
+│   └── memory-sync.md        # /memory-sync
+├── .mcp.json                 # Plugin's bundled MCP server registration
+├── .gitattributes            # LF line endings
 ├── package.json
 └── tsconfig.json
 ```

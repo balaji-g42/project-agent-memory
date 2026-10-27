@@ -13,7 +13,7 @@ Learn more: [Agent Skills Documentation](https://docs.anthropic.com/en/docs/agen
 ```
 skill/
 ├── SKILL.md                          # Main skill (YAML frontmatter + instructions)
-├── API-REFERENCE.md                  # Tool reference (7 tools)
+├── API-REFERENCE.md                  # Tool reference (7 tools, incl. hive memory)
 ├── MCP-CONFIG.md                     # Configuration guide
 ├── README.md                         # This file
 ├── migrate-qdrant-to-pgvector.mjs    # One-time Qdrant -> Postgres data copy
@@ -210,7 +210,7 @@ With the default `onnx` provider no API key is needed at all - embeddings run in
 ## Documentation
 
 - **[SKILL.md](SKILL.md)** - Usage instructions and workflows
-- **[API-REFERENCE.md](API-REFERENCE.md)** - Tool reference (7 tools)
+- **[API-REFERENCE.md](API-REFERENCE.md)** - Tool reference (7 tools, incl. hive memory)
 - **[MCP-CONFIG.md](MCP-CONFIG.md)** - Configuration guide
 
 ## Resources
