@@ -40,6 +40,7 @@ import {
     listProjects,
     looksSecret,
     purgeArchive,
+    verifyChain,
     restoreFromArchive,
     setProjectVisibility,
     upgradeProjects
@@ -135,6 +136,8 @@ server.registerTool('memory_read', {
             memory_type: memoryTypeSchema.optional().describe("Restrict to one memory type"),
             metadata_filter: z.record(z.string(), z.any()).optional().describe("Metadata equality filter, e.g. { status: [\"pending\", \"blocked\"] }"),
             limit: z.number().optional().describe("Maximum entries to return"),
+            author: z.string().optional().describe("Only entries last written by this person (login email, git email or OS user)"),
+            since: z.string().optional().describe("Only entries written at or after this ISO timestamp; applied after the limit on semantic search"),
             heat: z.number().int().min(1).max(10).optional().describe("Other projects only: 1 loose to 10 strict match")
         })).min(1).describe("One query for a single read, many for a batch")
     })
@@ -144,8 +147,8 @@ server.registerTool('memory_read', {
         targets?.length
             ? searchHive(params.project_name, targets, q)
             : q.query_text
-                ? queryMemory(params.project_name, q.query_text, q.memory_type ?? null, q.limit ?? 5, q.metadata_filter ?? null)
-                : listMemory(params.project_name, q.memory_type ?? null, q.limit ?? 5, q.metadata_filter ?? null)
+                ? queryMemory(params.project_name, q.query_text, q.memory_type ?? null, q.limit ?? 5, q.metadata_filter ?? null, { author: q.author, since: q.since })
+                : listMemory(params.project_name, q.memory_type ?? null, q.limit ?? 5, q.metadata_filter ?? null, { author: q.author, since: q.since })
     ));
     return text(results.length === 1 ? results[0] : results);
 });
@@ -259,14 +262,16 @@ server.registerTool('memory_graph', {
 });
 
 server.registerTool('memory_admin', {
-    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it, op=delete_collection permanently deletes the entire memory bank for a project, op=create_collection creates an empty memory bank for a new project (other tools refuse to create one implicitly: confirm the project name with the user first). op=list_projects lists other projects you can read; op=set_visibility sets this project's default; op=list_archive, restore, purge and history manage entries other projects deleted or edited here.",
+    description: "Maintenance operations. op=export dumps the memory bank as markdown, op=import loads markdown produced by export, op=summarize condenses a long text before storing it, op=delete_collection permanently deletes the entire memory bank for a project, op=create_collection creates an empty memory bank for a new project (other tools refuse to create one implicitly: confirm the project name with the user first). op=list_projects lists other projects you can read; op=set_visibility sets this project's default; op=verify checks the hash chain of entries by id; op=list_archive, restore, purge and history manage entries other projects deleted or edited here.",
     inputSchema: z.object({
         project_name: z.string().describe("Project name, case-sensitive"),
-        op: z.enum(["export", "import", "summarize", "delete_collection", "create_collection", "list_projects", "set_visibility", "list_archive", "restore", "purge", "history"]).describe("Admin operation"),
+        op: z.enum(["export", "import", "summarize", "delete_collection", "create_collection", "list_projects", "set_visibility", "list_archive", "restore", "purge", "history", "verify"]).describe("Admin operation"),
+        author: z.string().optional().describe("op=list_archive: only entries deleted by this person"),
+        since: z.string().optional().describe("op=list_archive: only entries deleted at or after this ISO timestamp"),
         memory_types: z.array(memoryTypeSchema).optional().describe("op=export: types to include; defaults to the structured contexts, decisions and progress"),
         markdown: z.string().optional().describe("op=import: markdown in this server's export format"),
         content: z.string().optional().describe("op=summarize: text to condense"),
-        ids: z.array(z.string()).optional().describe("op=restore, purge, history: entry ids"),
+        ids: z.array(z.string()).optional().describe("op=restore, purge, history, verify: entry ids"),
         visibility: z.enum(["public", "private"]).optional().describe("op=set_visibility: project default")
     })
 }, async (params) => {
@@ -278,11 +283,12 @@ server.registerTool('memory_admin', {
         return text({ visibility: await setProjectVisibility(params.project_name, params.visibility) });
     }
     if (params.op === "list_archive") {
-        return text(await listArchive(params.project_name));
+        return text(await listArchive(params.project_name, undefined, { author: params.author, since: params.since }));
     }
-    if (params.op === "restore" || params.op === "purge" || params.op === "history") {
+    if (params.op === "restore" || params.op === "purge" || params.op === "history" || params.op === "verify") {
         if (!params.ids?.length) throw new Error(`op=${params.op} requires ids`);
         const ids = params.ids.map(toPointId);
+        if (params.op === "verify") return text(await verifyChain(params.project_name, ids));
         if (params.op === "restore") return text(await restoreFromArchive(params.project_name, ids));
         if (params.op === "purge") return text({ purged: await purgeArchive(params.project_name, ids) });
         return text(await historyOf(params.project_name, ids[0]));

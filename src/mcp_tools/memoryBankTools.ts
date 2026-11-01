@@ -37,6 +37,20 @@ import {
     visibilityFromFlag,
     type Visibility
 } from "../hive.js";
+import { USER_ID, withChain } from "../identity.js";
+
+interface ReadFilters {
+    author?: string;
+    since?: string;
+}
+
+function authorClauses(author?: string): any[] {
+    return author ? [{ key: "written_by_user", match: { value: author } }] : [];
+}
+
+function sinceOnly<T extends { timestamp: string }>(rows: T[], since?: string): T[] {
+    return since ? rows.filter(row => String(row.timestamp) >= since) : rows;
+}
 
 /**
  * Cached embedding generation with performance optimization
@@ -97,6 +111,8 @@ interface QueryResult {
     private?: boolean;
     previous?: Record<string, any>;
     project?: string;
+    written_by_user?: string;
+    created_by_user?: string;
 }
 
 interface WriteStamp {
@@ -192,9 +208,11 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
 
     let version = 1;
     let visibility: Visibility | undefined = looksSecret(content) ? "private" : stamp.visibility;
+    let existingPayload: Record<string, any> | undefined;
     if (topLevelId) {
         const [existing] = await client.retrieve(collectionName, { ids: [pointId], with_payload: true });
         if (existing) {
+            existingPayload = existing.payload ?? {};
             version = versionOf(existing.payload) + 1;
             visibility = visibility ?? existing.payload?.visibility;
         }
@@ -203,7 +221,7 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
     const point = {
         id: pointId,
         vector,
-        payload: {
+        payload: withChain({
             type: memoryType,
             content,
             metadata,
@@ -212,9 +230,11 @@ async function logMemory(projectName: string, memoryType: MemoryType, content: s
             version,
             written_by: stamp.writtenBy ?? projectName,
             written_by_session: SESSION_ID,
+            written_by_user: USER_ID,
+            created_by_user: existingPayload ? (existingPayload.created_by_user ?? existingPayload.written_by_user ?? USER_ID) : USER_ID,
             write_token: uuidv4(),
             ...(visibility ? { visibility } : {})
-        }
+        }, existingPayload)
     };
 
     await client.upsert(collectionName, { wait: true, points: [point] });
@@ -247,13 +267,15 @@ function toQueryResult(point: { id: string | number; score?: number; payload?: R
         ...(payload.version !== undefined ? { version: payload.version } : {}),
         ...(payload.visibility === "private" ? { private: true } : {}),
         ...(payload.previous ? { previous: payload.previous } : {}),
+        ...(payload.written_by_user ? { written_by_user: payload.written_by_user } : {}),
+        ...(payload.created_by_user ? { created_by_user: payload.created_by_user } : {}),
         ...(project ? { project } : {})
     };
 }
 
-async function queryMemory(projectName: string, queryText: string, memoryType: string | null = null, topK: number = 5, metadataFilter: Record<string, any> | null = null): Promise<QueryResult[]> {
+async function queryMemory(projectName: string, queryText: string, memoryType: string | null = null, topK: number = 5, metadataFilter: Record<string, any> | null = null, filters: ReadFilters = {}): Promise<QueryResult[]> {
     // Check cache first
-    const cacheKey = cacheKeys.query(projectName, queryText, memoryType || undefined, topK) + (metadataFilter ? `:${JSON.stringify(metadataFilter)}` : "");
+    const cacheKey = cacheKeys.query(projectName, queryText, memoryType || undefined, topK) + (metadataFilter ? `:${JSON.stringify(metadataFilter)}` : "") + (filters.author || filters.since ? `:${JSON.stringify(filters)}` : "");
     const cachedResult = cacheUtils.getCached(queryCache, cacheKey);
     if (cachedResult) {
         return cachedResult;
@@ -268,7 +290,7 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
     // Build filter
     const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
     if (memoryType) mustFilter.push({ key: "type", match: { value: memoryType } });
-    mustFilter.push(...metadataFilterClauses(metadataFilter));
+    mustFilter.push(...metadataFilterClauses(metadataFilter), ...authorClauses(filters.author));
 
     const { points: results } = await client.query(collectionName, {
         with_payload: true,
@@ -277,7 +299,7 @@ async function queryMemory(projectName: string, queryText: string, memoryType: s
         filter: { must: mustFilter, must_not: [{ key: "type", match: { value: SETTINGS_TYPE } }] }
     });
 
-    const formattedResults: QueryResult[] = results.map((hit: any) => toQueryResult(hit));
+    const formattedResults: QueryResult[] = sinceOnly(results.map((hit: any) => toQueryResult(hit)), filters.since);
 
     // Cache the results
     cacheUtils.setCached(queryCache, cacheKey, formattedResults);
@@ -310,12 +332,12 @@ async function logMemoryChunked(projectName: string, memoryType: MemoryType, con
     return ids;
 }
 
-async function listMemory(projectName: string, memoryType: string | null = null, limit: number = 20, metadataFilter: Record<string, any> | null = null): Promise<QueryResult[]> {
+async function listMemory(projectName: string, memoryType: string | null = null, limit: number = 20, metadataFilter: Record<string, any> | null = null, filters: ReadFilters = {}): Promise<QueryResult[]> {
     const collectionName = await initMemoryBank(projectName);
 
     const mustFilter: any[] = [{ key: "project", match: { value: projectName } }];
     if (memoryType) mustFilter.push({ key: "type", match: { value: memoryType } });
-    mustFilter.push(...metadataFilterClauses(metadataFilter));
+    mustFilter.push(...metadataFilterClauses(metadataFilter), ...authorClauses(filters.author));
 
     const points: any[] = [];
     let offset: string | number | null | undefined;
@@ -331,9 +353,9 @@ async function listMemory(projectName: string, memoryType: string | null = null,
         offset = page.next_page_offset;
     } while (offset != null);
 
-    return points
+    return sinceOnly(points
         .filter((point: any) => !String(point.payload?.content ?? "").startsWith(PLACEHOLDER_PREFIX))
-        .map((point: any) => toQueryResult(point))
+        .map((point: any) => toQueryResult(point)), filters.since)
         .sort((a: QueryResult, b: QueryResult) => String(b.timestamp).localeCompare(String(a.timestamp)))
         .slice(0, limit);
 }
@@ -344,6 +366,8 @@ interface HiveQuery {
     metadata_filter?: Record<string, any>;
     limit?: number;
     heat?: number;
+    author?: string;
+    since?: string;
 }
 
 async function searchHive(caller: string, targets: string[], q: HiveQuery): Promise<QueryResult[]> {
@@ -358,27 +382,28 @@ async function searchHive(caller: string, targets: string[], q: HiveQuery): Prom
     const perProject = await Promise.all(projects.map(async (project): Promise<QueryResult[]> => {
         if (project === caller) {
             const own = q.query_text
-                ? await queryMemory(project, q.query_text, q.memory_type ?? null, limit, q.metadata_filter ?? null)
-                : await listMemory(project, q.memory_type ?? null, limit, q.metadata_filter ?? null);
+                ? await queryMemory(project, q.query_text, q.memory_type ?? null, limit, q.metadata_filter ?? null, { author: q.author, since: q.since })
+                : await listMemory(project, q.memory_type ?? null, limit, q.metadata_filter ?? null, { author: q.author, since: q.since });
             return own.map(r => ({ ...r, project }));
         }
         if (!(await bankExists(project))) return [];
         const visibility = await projectVisibility(project);
         const extra = [
             ...(q.memory_type ? [{ key: "type", match: { value: q.memory_type } }] : []),
-            ...metadataFilterClauses(q.metadata_filter ?? null)
+            ...metadataFilterClauses(q.metadata_filter ?? null),
+            ...authorClauses(q.author)
         ];
         const filter = foreignFilter(project, visibility, extra);
         if (vector) {
             const { points } = await client.query(bankName(project), { query: vector, limit, filter, with_payload: true });
-            return points
+            return sinceOnly(points
                 .filter(hit => hit.score >= minScore && isVisibleToForeign(hit.payload, visibility))
-                .map(hit => toQueryResult(hit, project));
+                .map(hit => toQueryResult(hit, project)), q.since);
         }
         const page = await client.scroll(bankName(project), { filter, limit: Math.max(limit, LIST_PAGE_SIZE), with_payload: true, with_vector: false });
-        return page.points
+        return sinceOnly(page.points
             .filter(point => isVisibleToForeign(point.payload, visibility))
-            .map(point => toQueryResult(point, project))
+            .map(point => toQueryResult(point, project)), q.since)
             .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
     }));
 
@@ -454,7 +479,7 @@ async function updateMemory(projectName: string, memoryId: string, content?: str
 
         const token = uuidv4();
         const { previous: _superseded, ...basePayload } = previousPayload;
-        const payload = {
+        const payload = withChain({
             ...basePayload,
             content: nextContent,
             metadata: nextMetadata,
@@ -462,10 +487,12 @@ async function updateMemory(projectName: string, memoryId: string, content?: str
             version: versionOf(previousPayload) + 1,
             written_by: caller,
             written_by_session: SESSION_ID,
+            written_by_user: USER_ID,
+            created_by_user: previousPayload.created_by_user ?? previousPayload.written_by_user ?? USER_ID,
             write_token: token,
             ...(visibility ? { visibility } : {}),
             ...(foreign ? { previous: snapshotOf(previousPayload) } : {})
-        };
+        }, previousPayload);
 
         if (foreign) await archiveSuperseded(projectName, pointId, previous.vector as number[], previousPayload);
         await client.upsert(collectionName, {

@@ -1,5 +1,6 @@
 import { client } from "./init.js";
 import config from "./config.js";
+import { USER_ID, chainHash } from "./identity.js";
 import {
     BANK_PREFIX,
     SCHEMA_VERSION,
@@ -130,6 +131,7 @@ export function snapshotOf(payload: Record<string, any>) {
         version: versionOf(payload),
         written_by: payload.written_by ?? null,
         written_by_session: payload.written_by_session ?? null,
+        written_by_user: payload.written_by_user ?? null,
         timestamp: payload.timestamp
     };
 }
@@ -154,7 +156,7 @@ export async function archiveDeleted(project: string, deletedBy: string, memoryI
         points: [{
             id: memoryId,
             vector,
-            payload: { ...payload, kind: "deleted", of: String(memoryId), deleted_by: deletedBy, deleted_by_session: SESSION_ID, archived_at: new Date().toISOString() }
+            payload: { ...payload, kind: "deleted", of: String(memoryId), deleted_by: deletedBy, deleted_by_session: SESSION_ID, deleted_by_user: USER_ID, archived_at: new Date().toISOString() }
         }]
     });
 }
@@ -201,10 +203,10 @@ export async function listProjects(exclude: string): Promise<Array<Record<string
     return rows.filter((row): row is Record<string, any> => row !== null).sort((a, b) => a.project.localeCompare(b.project));
 }
 
-export async function listArchive(project: string, limit = 50): Promise<Array<Record<string, any>>> {
+export async function listArchive(project: string, limit = 50, filters: { author?: string; since?: string } = {}): Promise<Array<Record<string, any>>> {
     if (!(await archiveExists(project))) return [];
     const page = await client.scroll(archiveName(project), {
-        filter: { must: [{ key: "kind", match: { value: "deleted" } }] },
+        filter: { must: [{ key: "kind", match: { value: "deleted" } }, ...(filters.author ? [{ key: "deleted_by_user", match: { value: filters.author } }] : [])] },
         limit: ARCHIVE_SCAN,
         with_payload: true,
         with_vector: false
@@ -215,8 +217,10 @@ export async function listArchive(project: string, limit = 50): Promise<Array<Re
             type: p.payload?.type,
             content: p.payload?.content,
             deleted_by: p.payload?.deleted_by,
+            deleted_by_user: p.payload?.deleted_by_user,
             deleted_at: p.payload?.archived_at
         }))
+        .filter(row => !filters.since || String(row.deleted_at) >= filters.since)
         .sort((a, b) => String(b.deleted_at).localeCompare(String(a.deleted_at)))
         .slice(0, limit);
 }
@@ -230,9 +234,40 @@ export async function historyOf(project: string, memoryId: string, limit = 10): 
         with_vector: false
     });
     return page.points
-        .map(p => ({ version: versionOf(p.payload), content: p.payload?.content, written_by: p.payload?.written_by, written_by_session: p.payload?.written_by_session, timestamp: p.payload?.timestamp }))
+        .map(p => ({ version: versionOf(p.payload), content: p.payload?.content, written_by: p.payload?.written_by, written_by_session: p.payload?.written_by_session, written_by_user: p.payload?.written_by_user, timestamp: p.payload?.timestamp }))
         .sort((a, b) => b.version - a.version)
         .slice(0, limit);
+}
+
+export async function verifyChain(project: string, ids: string[]): Promise<Array<Record<string, any>>> {
+    const hasArchive = await archiveExists(project);
+    return Promise.all(ids.map(async id => {
+        const [current] = await client.retrieve(bankName(project), { ids: [id], with_payload: true });
+        const records: Array<Record<string, any>> = current?.payload ? [current.payload] : [];
+        if (hasArchive) {
+            const page = await client.scroll(archiveName(project), {
+                filter: { must: [{ key: "of", match: { value: id } }, { key: "kind", match: { value: "superseded" } }] },
+                limit: ARCHIVE_SCAN,
+                with_payload: true,
+                with_vector: false
+            });
+            records.push(...page.points.map(p => p.payload ?? {}));
+        }
+        if (records.length === 0) return { id, ok: false, error: "not found" };
+        records.sort((a, b) => versionOf(a) - versionOf(b));
+        const broken: number[] = [];
+        let unhashed = 0;
+        records.forEach((record, i) => {
+            if (!record.hash) {
+                unhashed++;
+                return;
+            }
+            const before = records[i - 1];
+            const linked = before && versionOf(before) === versionOf(record) - 1 ? (record.prev_hash ?? null) === (before.hash ?? null) : true;
+            if (chainHash(record) !== record.hash || !linked) broken.push(versionOf(record));
+        });
+        return { id, ok: broken.length === 0, checked: records.length - unhashed, unhashed, ...(broken.length ? { broken } : {}) };
+    }));
 }
 
 export async function restoreFromArchive(project: string, ids: string[]): Promise<Array<Record<string, any>>> {
@@ -244,7 +279,7 @@ export async function restoreFromArchive(project: string, ids: string[]): Promis
         if (!record || record.payload?.kind !== "deleted") return { id, restored: false, error: "not in archive" };
         const [current] = await client.retrieve(bank, { ids: [id], with_payload: false });
         if (current) return { id, restored: false, error: "an entry with this id already exists" };
-        const { kind: _k, of: _o, archived_at: _a, deleted_by: _d, deleted_by_session: _s, ...payload } = record.payload;
+        const { kind: _k, of: _o, archived_at: _a, deleted_by: _d, deleted_by_session: _s, deleted_by_user: _u, ...payload } = record.payload;
         await client.upsert(bank, { wait: true, update_mode: "insert_only", points: [{ id, vector: record.vector as number[], payload }] });
         await client.delete(archive, { wait: true, points: [id] });
         return { id, restored: true };
