@@ -1,11 +1,16 @@
 import { fileURLToPath } from "url";
+import c from "./queries/c.js";
 import c_sharp from "./queries/c_sharp.js";
+import cpp from "./queries/cpp.js";
 import dart from "./queries/dart.js";
 import go from "./queries/go.js";
 import java from "./queries/java.js";
 import javascript from "./queries/javascript.js";
 import kotlin from "./queries/kotlin.js";
+import lua from "./queries/lua.js";
+import php from "./queries/php.js";
 import python from "./queries/python.js";
+import ruby from "./queries/ruby.js";
 import rust from "./queries/rust.js";
 import swift from "./queries/swift.js";
 import typescript, { tsx as tsxQuery } from "./queries/typescript.js";
@@ -21,6 +26,7 @@ const ts: LanguageSpec = { grammar: "typescript", query: typescript };
 const tsx: LanguageSpec = { grammar: "tsx", query: tsxQuery };
 const js: LanguageSpec = { grammar: "javascript", query: javascript };
 const kt: LanguageSpec = { grammar: "kotlin", query: kotlin };
+const cc: LanguageSpec = { grammar: "cpp", query: cpp };
 
 export const LANGUAGES: Record<string, LanguageSpec> = {
     ".ts": ts,
@@ -39,5 +45,16 @@ export const LANGUAGES: Record<string, LanguageSpec> = {
     ".kt": kt,
     ".kts": kt,
     ".dart": { grammar: "dart", query: dart },
-    ".swift": { grammar: "swift", query: swift }
+    ".swift": { grammar: "swift", query: swift },
+    ".c": { grammar: "c", query: c },
+    ".h": cc,
+    ".cc": cc,
+    ".cpp": cc,
+    ".cxx": cc,
+    ".hpp": cc,
+    ".hh": cc,
+    ".hxx": cc,
+    ".php": { grammar: "php", query: php },
+    ".rb": { grammar: "ruby", query: ruby },
+    ".lua": { grammar: "lua", query: lua }
 };

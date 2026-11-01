@@ -13,6 +13,11 @@ Every grammar the code indexer uses lives here as a `.wasm` file, loaded by web-
 | `tree-sitter-go.wasm` | Go | npm `tree-sitter-go@0.25.0` | copied unmodified | `LICENSE-tree-sitter-go` |
 | `tree-sitter-c_sharp.wasm` | C# | npm `tree-sitter-c-sharp@0.23.5` | copied unmodified | `LICENSE-tree-sitter-c-sharp` |
 | `tree-sitter-kotlin.wasm` | Kotlin | npm `@tree-sitter-grammars/tree-sitter-kotlin@1.1.0` | copied unmodified | `LICENSE-tree-sitter-kotlin` |
+| `tree-sitter-c.wasm` | C | npm `tree-sitter-c@0.24.1` | copied unmodified | `LICENSE-tree-sitter-c` |
+| `tree-sitter-cpp.wasm` | C++ (also `.h`) | npm `tree-sitter-cpp@0.23.4` | copied unmodified | `LICENSE-tree-sitter-cpp` |
+| `tree-sitter-php.wasm` | PHP | npm `tree-sitter-php@0.24.2` | copied unmodified | `LICENSE-tree-sitter-php` |
+| `tree-sitter-ruby.wasm` | Ruby | npm `tree-sitter-ruby@0.23.1` | copied unmodified | `LICENSE-tree-sitter-ruby` |
+| `tree-sitter-lua.wasm` | Lua | npm `@tree-sitter-grammars/tree-sitter-lua@0.4.1` | copied unmodified | `LICENSE-tree-sitter-lua` |
 | `tree-sitter-dart.wasm` | Dart | https://github.com/nielsenko/tree-sitter-dart release `0.2.0` (commit `b57d734c84f510bbd524097902cab671e4dbfca9`) | built with tree-sitter-cli 0.27.1 | `LICENSE-tree-sitter-dart` |
 | `tree-sitter-swift.wasm` | Swift | https://github.com/alex-pinkus/tree-sitter-swift release `0.7.3` (commit `b8b22bffbb3441780e6471665bacfb263741c86a`) | release asset, unmodified | `LICENSE-tree-sitter-swift` |
 

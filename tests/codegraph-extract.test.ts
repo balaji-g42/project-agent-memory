@@ -13,6 +13,9 @@ const EXPECTED_IMPORTS = [
     "com/x/J.java -> com/x/Util.java",
     "k.py -> pkg/mod.py",
     "m.js -> n.js",
+    "rb1.rb -> rb2.rb",
+    "x.c -> h.h",
+    "x.cpp -> h.h",
     "ui.tsx -> b.ts",
     "ui.tsx -> src/lib/u.ts"
 ];
@@ -31,7 +34,17 @@ const EXPECTED_CALLS = [
     "com/x/Ctl.java::Ctl.u -> com/x/Util.java::Util.u INFERRED",
     "com/x/J.java::J.m -> com/x/Util.java::Util.u EXTRACTED",
     "com/x/J.java::J.m -> com/x/J.java::J.n EXTRACTED",
+    "e.php::P.m -> e.php::P.n EXTRACTED",
+    "e.php::P.m -> e.php::helper EXTRACTED",
     "g.go::T.M -> g.go::F EXTRACTED",
+    "l.lua::M.a -> l.lua::M.b EXTRACTED",
+    "l.lua::top -> l.lua::helper EXTRACTED",
+    "rb1.rb::M.Rb.go -> rb1.rb::helper EXTRACTED",
+    "rb1.rb::M.Rb.go -> rb1.rb::M.Rb.stop EXTRACTED",
+    "x.c::main -> x.c::helper EXTRACTED",
+    "x.cpp::C.m -> x.cpp::C.n EXTRACTED",
+    "x.cpp::C.m -> x.cpp::free_fn EXTRACTED",
+    "x.cpp::T.go -> x.cpp::free_fn EXTRACTED",
     "k.py::K.go -> pkg/mod.py::util EXTRACTED",
     "k.py::K.go -> k.py::K.go2 EXTRACTED",
     "m.js::main -> n.js::run EXTRACTED",
@@ -67,7 +80,7 @@ async function summarize(root: string) {
 }
 
 describe("extractCodeGraph", () => {
-    it("emits exactly the expected imports and calls across all 10 languages", async () => {
+    it("emits exactly the expected imports and calls across all 15 languages", async () => {
         const { imports, calls } = await summarize(FIXTURE);
         expect(imports).toEqual([...EXPECTED_IMPORTS].sort());
         expect(calls).toEqual([...EXPECTED_CALLS].sort());
@@ -95,6 +108,14 @@ describe("extractCodeGraph", () => {
         expect(byId.get("a.swift::A.q")).toMatchObject({ label: ".q()" });
         expect(byId.get("a.kt::O.o")).toMatchObject({ label: ".o()" });
         expect(byId.get("c.cs::C.M")).toMatchObject({ label: ".M()" });
+        expect(byId.get("x.c::helper")).toMatchObject({ label: "helper()" });
+        expect(byId.get("x.c::S")).toMatchObject({ label: "S" });
+        expect(byId.get("x.cpp::C.m")).toMatchObject({ label: ".m()", source_location: "L3" });
+        expect(byId.get("e.php::P.n")).toMatchObject({ label: ".n()" });
+        expect(byId.get("e.php::I")).toMatchObject({ label: "I" });
+        expect(byId.get("rb1.rb::M.Rb.stop")).toMatchObject({ label: ".stop()" });
+        expect(byId.get("rb1.rb::helper")).toMatchObject({ label: "helper()" });
+        expect(byId.get("l.lua::M.b")).toMatchObject({ label: ".b()" });
         expect(byId.get("com/x/J.java::J.m")).toMatchObject({ source_file: "com/x/J.java" });
         expect(new Set(graph.nodes.map((n) => n.id)).size).toBe(graph.nodes.length);
     });
