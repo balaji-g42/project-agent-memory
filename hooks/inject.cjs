@@ -1,7 +1,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 
 const JSON_EVENTS = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]);
 
@@ -15,6 +15,8 @@ const MIN_RECALL_PROMPT = 12;
 const MAX_CONTEXT_CHARS = 6000;
 
 const COMMIT_WINDOW_S = 120;
+const UPDATE_CHECK_TTL_MS = 24 * 60 * 60 * 1000;
+const PLUGIN_ID = "pam@balaji-g42";
 
 const CONFIG_FILE = path.join(os.homedir(), "mcp", "project-agent-memory", "config.json");
 const MEMORY_TOOLS = /^mcp__(plugin_pam_mem|mem)__memory_(create|update)$/;
@@ -395,6 +397,63 @@ function readCodeStats(name) {
   }
 }
 
+function newerVersion(latest, installed) {
+  const a = String(latest).split(".").map(Number);
+  const b = String(installed).split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return false;
+}
+
+const FETCH_LATEST = `
+const fs = require("fs");
+const [file, previous] = process.argv.slice(1);
+fetch("https://registry.npmjs.org/project-agent-memory/latest", { signal: AbortSignal.timeout(8000) })
+  .then((res) => res.json())
+  .then((pkg) => {
+    if (!/^\\d+\\.\\d+\\.\\d+$/.test(pkg.version)) return;
+    const old = JSON.parse(previous);
+    fs.writeFileSync(file, JSON.stringify({ ...old, latest: pkg.version, checkedAt: Date.now() }), "utf8");
+  })
+  .catch(() => {});
+`;
+
+function updateNotice() {
+  if (!process.env.CLAUDE_PLUGIN_ROOT) return "";
+  if (["false", "0", "off"].includes((setting(readConfigFile(), "UPDATE_CHECK") || "true").toLowerCase())) return "";
+  const installed = pamVersion();
+  if (!installed) return "";
+  const file = statePath("update-check.json");
+  let cache = {};
+  try {
+    cache = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {}
+  try {
+    if (!cache.checkedAt || Date.now() - cache.checkedAt > UPDATE_CHECK_TTL_MS) {
+      fs.mkdirSync(STATE_DIR, { recursive: true });
+      cache = { ...cache, checkedAt: Date.now() };
+      fs.writeFileSync(file, JSON.stringify(cache), "utf8");
+      spawn(process.execPath, ["-e", FETCH_LATEST, file, JSON.stringify(cache)], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      }).unref();
+    }
+    if (!cache.latest || !newerVersion(cache.latest, installed) || cache.notified === cache.latest) return "";
+    fs.writeFileSync(file, JSON.stringify({ ...cache, notified: cache.latest }), "utf8");
+  } catch {
+    return "";
+  }
+  return (
+    `
+
+PLUGIN UPDATE: project-agent-memory ${cache.latest} is available on npm (installed ${installed}). Ask the user ` +
+    `whether to update now. Only if they agree, run \`claude plugin update ${PLUGIN_ID}\` and tell them to restart ` +
+    "Claude Code to apply it. If they decline, do not ask again for this version."
+  );
+}
+
 function onSessionStart(payload) {
   const cwd = payload.cwd || process.cwd();
   const name = projectName(cwd);
@@ -415,7 +474,7 @@ function onSessionStart(payload) {
   } catch {
     context = "\n\nLOADED CONTEXT: unavailable - call memory_context for this project.";
   }
-  return MEMORY_RULES(name, memorySetup()) + context;
+  return MEMORY_RULES(name, memorySetup()) + context + updateNotice();
 }
 
 function onUserPromptSubmit(payload) {

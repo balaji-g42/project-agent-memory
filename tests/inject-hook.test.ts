@@ -14,12 +14,12 @@ const project = fs.mkdtempSync(path.join(os.tmpdir(), 'pam-hook-proj-'));
 const projectName = path.basename(project);
 const stateDir = path.join(home, '.claude', 'state');
 
-function run(payload: Record<string, any>): string {
+function run(payload: Record<string, any>, extra: Record<string, string> = {}): string {
     const env: Record<string, string> = { ...(process.env as Record<string, string>), HOME: home, USERPROFILE: home };
     for (const key of Object.keys(env)) {
         if (key === 'CLAUDE_PLUGIN_ROOT' || key.startsWith('PAM_') || key === 'MODE') delete env[key];
     }
-    const res = spawnSync('node', [HOOK], { input: JSON.stringify(payload), env, encoding: 'utf8' });
+    const res = spawnSync('node', [HOOK], { input: JSON.stringify(payload), env: { ...env, ...extra }, encoding: 'utf8' });
     return res.stdout;
 }
 
@@ -96,5 +96,43 @@ describe('hooks.json matcher', () => {
 
     it.each([`${LEGACY_PREFIX}memory_create`, 'mcp__plugin_pam_mem__memory_read', 'Read'])('does not match %s', (tool) => {
         expect(matches(tool)).toBe(false);
+    });
+});
+
+describe('SessionStart update notice', () => {
+    const cacheFile = () => state('update-check.json');
+    const cache = (latest: string, extra: Record<string, any> = {}) =>
+        fs.writeFileSync(cacheFile(), JSON.stringify({ latest, checkedAt: Date.now(), ...extra }));
+    const start = (extra: Record<string, string> = { CLAUDE_PLUGIN_ROOT: path.resolve('.') }) =>
+        run({ hook_event_name: 'SessionStart', session_id: 's5', cwd: project }, extra);
+
+    it('announces a newer npm version once and records it', () => {
+        cache('99.0.0');
+        const first = start();
+        expect(first).toContain('PLUGIN UPDATE');
+        expect(first).toContain('99.0.0');
+        expect(first).toContain('claude plugin update pam@balaji-g42');
+        expect(JSON.parse(fs.readFileSync(cacheFile(), 'utf8')).notified).toBe('99.0.0');
+        expect(start()).not.toContain('PLUGIN UPDATE');
+    });
+
+    it('announces again when a still newer version appears', () => {
+        cache('99.0.1', { notified: '99.0.0' });
+        expect(start()).toContain('99.0.1');
+    });
+
+    it('stays silent when the installed version is current', () => {
+        cache('0.0.1');
+        expect(start()).not.toContain('PLUGIN UPDATE');
+    });
+
+    it('stays silent outside plugin mode', () => {
+        cache('99.0.0');
+        expect(start({})).not.toContain('PLUGIN UPDATE');
+    });
+
+    it.each(['false', '0', 'off'])('UPDATE_CHECK=%s turns it off', (value) => {
+        cache('99.0.0');
+        expect(start({ CLAUDE_PLUGIN_ROOT: path.resolve('.'), UPDATE_CHECK: value })).not.toContain('PLUGIN UPDATE');
     });
 });
