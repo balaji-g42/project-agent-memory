@@ -116,6 +116,8 @@ function resolveImport(grammar: string, rel: string, raw: string, files: Set<str
             : [mod, `src/${mod}`, posix.join(dir, mod)];
         return pick(bases.flatMap((b) => [`${b}.py`, `${b}/__init__.py`]));
     }
+    if (grammar === "c" || grammar === "cpp") return pick([posix.join(dir, raw)]);
+    if (grammar === "ruby") return pick([posix.join(dir, `${raw}.rb`)]);
     if (grammar === "java" || grammar === "kotlin") {
         const path = raw.replace(/\./g, "/");
         return byStem.get(raw.split(".").pop() ?? "")?.find((f) => {
