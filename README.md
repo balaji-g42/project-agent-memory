@@ -25,7 +25,7 @@ A TypeScript MCP (Model Context Protocol) server that gives a coding agent persi
 ### One command (recommended)
 
 ```bash
-npx -y project-agent-memory@3.4.2 setup
+npx -y project-agent-memory@3.4.3 setup
 ```
 
 It asks for anything not given as a flag, then:
@@ -110,7 +110,7 @@ node dist/index.js
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.4.2"],
+      "args": ["-y", "project-agent-memory@3.4.3"],
       "env": {
         "QDRANT_URL": "http://localhost:6333"
       }
@@ -327,7 +327,7 @@ Local (embeddings computed on this machine, Qdrant on localhost):
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.4.2"],
+      "args": ["-y", "project-agent-memory@3.4.3"],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
         "VECTOR_DIM": "768",
@@ -346,7 +346,7 @@ Self-hosted / cloud Qdrant (remote instance, API key, embeddings still local):
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.4.2"],
+      "args": ["-y", "project-agent-memory@3.4.3"],
       "env": {
         "MEMORY_BACKEND": "qdrant",
         "QDRANT_URL": "https://qdrant.example.com",
@@ -400,7 +400,7 @@ Drop `--dry-run` once the reported counts look right. Use `--all` instead of `--
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.4.2"],
+      "args": ["-y", "project-agent-memory@3.4.3"],
       "env": {
         "MEMORY_BACKEND": "postgres",
         "PREST_URL": "http://localhost:3000",
@@ -423,7 +423,7 @@ Self-hosted / cloud Postgres (pREST sits in front of it; the server never opens 
   "mcpServers": {
     "mem": {
       "command": "npx",
-      "args": ["-y", "project-agent-memory@3.4.2"],
+      "args": ["-y", "project-agent-memory@3.4.3"],
       "env": {
         "MEMORY_BACKEND": "postgres",
         "PREST_URL": "https://prest.example.com",
