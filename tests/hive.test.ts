@@ -32,6 +32,7 @@ describe('Hive memory: cross-project access', () => {
             args: ['dist/index.js'],
             env: {
                 ...(process.env as Record<string, string>),
+                AUTO_CREATE_COLLECTIONS: 'true',
                 VECTOR_DIM: '768',
                 EMBEDDING_PROVIDER: 'onnx',
                 EMBEDDING_MODEL: 'nomic-ai/nomic-embed-text-v1.5'
@@ -119,6 +120,17 @@ describe('Hive memory: cross-project access', () => {
         const history = await call('memory_admin', { project_name: A, op: 'history', ids: [state.e1] });
         expect(history).toHaveLength(1);
         expect(history[0].version).toBe(1);
+
+        expect(e1.written_by_user).toBeTruthy();
+        expect(e1.created_by_user).toBeTruthy();
+        const verified = await call('memory_admin', { project_name: A, op: 'verify', ids: [state.e1] });
+        expect(verified[0]).toMatchObject({ ok: true, checked: 2 });
+
+        const byAuthor = (author: string, since?: string) =>
+            call('memory_read', { project_name: A, queries: [{ memory_type: 'systemPatterns', limit: 20, author, since }] });
+        expect((await byAuthor(e1.written_by_user)).find((r: any) => r.id === state.e1)).toBeDefined();
+        expect((await byAuthor('nobody@example.invalid')).find((r: any) => r.id === state.e1)).toBeUndefined();
+        expect((await byAuthor(e1.written_by_user, '2999-01-01T00:00:00.000Z')).find((r: any) => r.id === state.e1)).toBeUndefined();
     });
 
     it('foreign callers cannot change visibility', async () => {
@@ -157,6 +169,9 @@ describe('Hive memory: cross-project access', () => {
 
         const archive = await call('memory_admin', { project_name: A, op: 'list_archive' });
         expect(archive.find((r: any) => r.id === state.e1).deleted_by).toBe(B);
+        expect(archive.find((r: any) => r.id === state.e1).deleted_by_user).toBeTruthy();
+        const future = await call('memory_admin', { project_name: A, op: 'list_archive', since: '2999-01-01T00:00:00.000Z' });
+        expect(future).toEqual([]);
 
         const restored = await call('memory_admin', { project_name: A, op: 'restore', ids: [state.e1] });
         expect(restored[0].restored).toBe(true);
