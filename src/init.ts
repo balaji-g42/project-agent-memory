@@ -46,6 +46,43 @@ function readVectorSize(params: unknown): number | undefined {
     return typeof size === "number" ? size : undefined;
 }
 
+async function createMemoryBank(projectName: string): Promise<string> {
+    const collectionName = `memory_bank_${projectName}`;
+    await client.createCollection(collectionName, {
+        vectors: {
+            size: config.VECTOR_DIM as number,
+            distance: (DISTANCE_MAP[config.DISTANCE_METRIC] || "Cosine") as "Cosine"
+        }
+    });
+
+    // Insert placeholder points for each memory type
+    const points: VectorPoint[] = MEMORY_TYPES.map(memType => ({
+        id: uuidv4(),
+        vector: Array(config.VECTOR_DIM).fill(0),
+        payload: {
+            type: memType,
+            content: `Initial placeholder for ${memType}`,
+            timestamp: new Date().toISOString(),
+            project: projectName,
+        }
+    }));
+    points.push({
+        id: settingsPointId(projectName),
+        vector: Array(config.VECTOR_DIM).fill(0),
+        payload: {
+            type: SETTINGS_TYPE,
+            content: "Project settings",
+            visibility: "public",
+            schema_version: SCHEMA_VERSION,
+            timestamp: new Date().toISOString(),
+            project: projectName,
+        }
+    });
+
+    await client.upsert(collectionName, { wait: true, points });
+    return collectionName;
+}
+
 async function initMemoryBank(projectName: string): Promise<string> {
     const collectionName = `memory_bank_${projectName}`;
 
@@ -68,41 +105,18 @@ async function initMemoryBank(projectName: string): Promise<string> {
     }
 
     if (!exists) {
-        await client.createCollection(collectionName, {
-            vectors: { 
-                size: config.VECTOR_DIM as number, 
-                distance: (DISTANCE_MAP[config.DISTANCE_METRIC] || "Cosine") as "Cosine"
-            }
-        });
-
-        // Insert placeholder points for each memory type
-        const points: VectorPoint[] = MEMORY_TYPES.map(memType => ({
-            id: uuidv4(),
-            vector: Array(config.VECTOR_DIM).fill(0),
-            payload: {
-                type: memType,
-                content: `Initial placeholder for ${memType}`,
-                timestamp: new Date().toISOString(),
-                project: projectName,
-            }
-        }));
-        points.push({
-            id: settingsPointId(projectName),
-            vector: Array(config.VECTOR_DIM).fill(0),
-            payload: {
-                type: SETTINGS_TYPE,
-                content: "Project settings",
-                visibility: "public",
-                schema_version: SCHEMA_VERSION,
-                timestamp: new Date().toISOString(),
-                project: projectName,
-            }
-        });
-
-        await client.upsert(collectionName, { wait: true, points });
+        if (!config.AUTO_CREATE_COLLECTIONS) {
+            throw new Error(
+                `Memory bank ${collectionName} does not exist. Nothing was created. Ask the user whether ` +
+                `project "${projectName}" is the right name (case-sensitive) and whether to create a new ` +
+                `memory bank for it. Only after the user confirms, call memory_admin op=create_collection ` +
+                `with project_name="${projectName}", then retry.`
+            );
+        }
+        await createMemoryBank(projectName);
     }
 
     return collectionName;
 }
 
-export { initMemoryBank, client, readVectorSize, qdrantPort };
+export { initMemoryBank, createMemoryBank, client, readVectorSize, qdrantPort };
