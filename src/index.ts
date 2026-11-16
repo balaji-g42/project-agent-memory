@@ -5,7 +5,8 @@ import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { readFileSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
@@ -340,6 +341,11 @@ async function main() {
     try {
         await server.connect(transport);
         console.error("Project Agent Memory server running on stdio");
+        try {
+            const stateDir = join(homedir(), ".claude", "state");
+            mkdirSync(stateDir, { recursive: true });
+            writeFileSync(join(stateDir, "pam-cli.json"), JSON.stringify({ version: packageJson.version, path: join(__dirname, "cli.js") }));
+        } catch {}
         upgradeProjects().catch(err => console.error("Hive upgrade skipped:", err instanceof Error ? err.message : err));
     } catch (error) {
         const err = error as Error;
