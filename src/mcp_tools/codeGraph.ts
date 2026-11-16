@@ -265,9 +265,9 @@ async function queryCodeGraph(
     return renderCodeGraph(seeds, nodes, exact);
 }
 
-async function searchCodeNodes(projectName: string, query: string, limit: number = 3): Promise<Array<{ score: number; label: string; location: string }>> {
+async function searchCodeNodes(projectName: string, query: string, limit: number = 3, queryVector?: number[]): Promise<Array<{ score: number; label: string; location: string }>> {
     if (!(await hasCodeGraph(projectName))) return [];
-    const [vector] = await embedTexts([query]);
+    const vector = queryVector ?? (await embedTexts([query]))[0];
     const { points } = await client.query(codeCollection(projectName), {
         query: vector,
         limit,

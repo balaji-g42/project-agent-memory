@@ -1,5 +1,8 @@
 import axios from "axios";
-import config from "../config.js";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import config, { CONFIG_FILE } from "../config.js";
 import type { VectorClient } from "../types.js";
 import {
     toVectorHeaderValue,
@@ -60,6 +63,18 @@ function buildParams(params: Record<string, string | number | string[] | undefin
     return qs;
 }
 
+let repairSchema: (() => Promise<void>) | null = null;
+
+async function withRepair<T>(send: () => Promise<T>): Promise<T> {
+    try {
+        return await send();
+    } catch (err: any) {
+        if (!err?.response || !repairSchema) throw err;
+        await repairSchema();
+        return send();
+    }
+}
+
 async function execRead(
     location: string,
     name: string,
@@ -67,10 +82,10 @@ async function execRead(
     extraHeaders?: Record<string, string>
 ): Promise<any[]> {
     const qs = buildParams(params);
-    const { data } = await axios.get(
+    const { data } = await withRepair(() => axios.get(
         `${baseUrl()}/_QUERIES/${config.PREST_DATABASE}/${location}/${name}?${qs.toString()}`,
         { headers: { ...authHeader(), ...extraHeaders } }
-    );
+    ));
     return data as any[];
 }
 
@@ -81,20 +96,52 @@ async function execWrite(
     extraHeaders?: Record<string, string>
 ): Promise<any> {
     const qs = buildParams(params);
-    const { data } = await axios.post(
+    const { data } = await withRepair(() => axios.post(
         `${baseUrl()}/_QUERIES/${config.PREST_DATABASE}/${location}/${name}?${qs.toString()}`,
         {},
         { headers: { ...authHeader(), ...extraHeaders } }
-    );
+    ));
     return data;
+}
+
+const SCHEMA_MARKER = join(dirname(CONFIG_FILE), "prest-schema.key");
+
+function readMarker(): string {
+    try {
+        return readFileSync(SCHEMA_MARKER, "utf8");
+    } catch {
+        return "";
+    }
 }
 
 class PrestVectorClient implements VectorClient {
     private ready: Promise<void> | null = null;
 
+    private schemaKey(): string {
+        return createHash("sha256")
+            .update([config.PREST_URL, config.PREST_DATABASE, config.VECTOR_DIM, this.createSchema.toString()].join("\n"))
+            .digest("hex");
+    }
+
     private async ensureSchema(): Promise<void> {
         if (!this.ready) {
-            this.ready = this.createSchema().catch(err => {
+            const key = this.schemaKey();
+            if (readMarker() === key) {
+                this.ready = Promise.resolve();
+                repairSchema = () => {
+                    repairSchema = null;
+                    rmSync(SCHEMA_MARKER, { force: true });
+                    this.ready = null;
+                    return this.ensureSchema();
+                };
+                return this.ready;
+            }
+            this.ready = this.createSchema().then(() => {
+                try {
+                    mkdirSync(dirname(SCHEMA_MARKER), { recursive: true });
+                    writeFileSync(SCHEMA_MARKER, key, "utf8");
+                } catch {}
+            }).catch(err => {
                 this.ready = null;
                 throw err;
             });

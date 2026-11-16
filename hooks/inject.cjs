@@ -358,25 +358,45 @@ function pamVersion() {
   return setting(readConfigFile(), "PAM_VERSION");
 }
 
-function runCli(args, input, timeout) {
+function installedCli(version) {
+  try {
+    const cli = JSON.parse(fs.readFileSync(statePath("cli.json"), "utf8"));
+    return cli.version === version && fs.existsSync(cli.path) ? cli.path : null;
+  } catch {
+    return null;
+  }
+}
+
+function execCli(args, input, timeout) {
   const local = path.join(__dirname, "..", "dist", "cli.js");
   const hasLocal = fs.existsSync(local);
   const version = hasLocal ? null : pamVersion();
-  if (!hasLocal && !version) return "";
-  const [command, prefix, shell] = hasLocal
-    ? [process.execPath, [local], false]
+  if (!hasLocal && !version) throw new Error("no PAM version configured");
+  const cli = hasLocal ? local : installedCli(version);
+  const [command, prefix, shell] = cli
+    ? [process.execPath, [cli], false]
     : ["npx", ["-y", "-p", `project-agent-memory@${version}`, "project-agent-memory-cli"], process.platform === "win32"];
+  const quote = (arg) => (shell ? `"${String(arg).replace(/"/g, '""')}"` : arg);
   try {
-    const quote = (arg) => (shell ? `"${String(arg).replace(/"/g, '""')}"` : arg);
     return execFileSync(command, [...prefix, ...args].map(quote), {
       encoding: "utf8",
       input: input || "",
       timeout,
-      cwd: hasLocal ? undefined : os.homedir(),
+      cwd: cli ? undefined : os.homedir(),
       shell,
       windowsHide: true,
-      stdio: ["pipe", "pipe", "ignore"],
+      stdio: ["pipe", "pipe", "pipe"],
     }).trim();
+  } catch (err) {
+    if (err.signal || err.code === "ETIMEDOUT") throw new Error(`timeout ${timeout / 1000} s`);
+    const last = String(err.stderr || "").trim().split(/\r?\n/).pop();
+    throw new Error(last || err.message);
+  }
+}
+
+function runCli(args, input, timeout) {
+  try {
+    return execCli(args, input, timeout);
   } catch {
     return "";
   }
@@ -480,7 +500,11 @@ function onSessionStart(payload) {
 function onUserPromptSubmit(payload) {
   const prompt = String(payload.prompt || "").trim();
   if (prompt.length < MIN_RECALL_PROMPT || isVault()) return "";
-  return runCli(["recall", projectName(payload.cwd || process.cwd())], prompt, RECALL_TIMEOUT_MS);
+  try {
+    return execCli(["recall", projectName(payload.cwd || process.cwd())], prompt, RECALL_TIMEOUT_MS);
+  } catch (err) {
+    return `PAM recall failed: ${err.message}`;
+  }
 }
 
 function onPreToolUse(payload) {

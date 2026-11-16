@@ -7,13 +7,15 @@ const MIN_CODE_SCORE = 0.5;
 const MAX_MEMORY_CHARS = 300;
 const MAX_CONTEXT_PATTERNS = 20;
 const MAX_CONTEXT_CHARS = 3000;
+const RECALL_DEADLINE_MS = 6000;
 
 async function recall(projectName: string, prompt: string): Promise<string> {
-    const { queryMemory } = await import("./mcp_tools/memoryBankTools.js");
+    const { queryMemory, getCachedEmbeddings } = await import("./mcp_tools/memoryBankTools.js");
     const { searchCodeNodes } = await import("./mcp_tools/codeGraph.js");
+    const vector = await getCachedEmbeddings([prompt]).then(([v]) => v).catch(() => undefined);
     const [memories, code] = await Promise.all([
-        queryMemory(projectName, prompt, null, 5).catch(() => []),
-        searchCodeNodes(projectName, prompt, 3).catch(() => [])
+        queryMemory(projectName, prompt, null, 5),
+        searchCodeNodes(projectName, prompt, 3, vector).catch(() => [])
     ]);
 
     const lines: string[] = [];
@@ -65,7 +67,11 @@ async function main() {
     if (!projectName) throw new Error("Usage: project-agent-memory-cli <recall|context|index|stats> <project_name> [root]\n       project-agent-memory-cli migrate <project_name|--all> [--dry-run] [--resume]\n       project-agent-memory-cli upgrade --all [--dry-run] [--private a,b]");
 
     if (command === "recall") {
-        process.stdout.write(await recall(projectName, await readStdin()));
+        const prompt = await readStdin();
+        const deadline = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`timeout ${RECALL_DEADLINE_MS / 1000} s`)), RECALL_DEADLINE_MS).unref()
+        );
+        process.stdout.write(await Promise.race([recall(projectName, prompt), deadline]));
     } else if (command === "context") {
         process.stdout.write(await context(projectName));
     } else if (command === "index") {

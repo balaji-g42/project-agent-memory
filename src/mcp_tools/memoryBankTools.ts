@@ -1326,6 +1326,7 @@ function entriesToStructuredObject(entries: Array<{ heading: string; content: st
 export {
     logMemory,
     queryMemory,
+    getCachedEmbeddings,
     listMemory,
     logMemoryChunked,
     searchHive,

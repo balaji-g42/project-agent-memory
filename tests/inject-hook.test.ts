@@ -136,3 +136,41 @@ describe('SessionStart update notice', () => {
         expect(start({ CLAUDE_PLUGIN_ROOT: path.resolve('.'), UPDATE_CHECK: value })).not.toContain('PLUGIN UPDATE');
     });
 });
+
+describe('recall CLI resolution', () => {
+    const plugin = fs.mkdtempSync(path.join(os.tmpdir(), 'pam-plugin-'));
+    const fakeCli = path.join(plugin, 'fake-cli.js');
+
+    beforeEach(() => {
+        fs.mkdirSync(path.join(plugin, 'hooks'), { recursive: true });
+        fs.copyFileSync(HOOK, path.join(plugin, 'hooks', 'inject.cjs'));
+        fs.writeFileSync(path.join(plugin, 'package.json'), JSON.stringify({ name: 'project-agent-memory', publishedVersion: '9.9.9' }));
+        fs.writeFileSync(fakeCli, 'process.stdout.write("FAKE " + process.argv.slice(2).join(" "))');
+        fs.mkdirSync(stateDir, { recursive: true });
+    });
+
+    afterAll(() => fs.rmSync(plugin, { recursive: true, force: true }));
+
+    const recall = () => {
+        const env: Record<string, string> = { ...(process.env as Record<string, string>), HOME: home, USERPROFILE: home };
+        const payload = { hook_event_name: 'UserPromptSubmit', session_id: 'r1', cwd: project, prompt: 'how does recall reach the cli here' };
+        return spawnSync('node', [path.join(plugin, 'hooks', 'inject.cjs')], { input: JSON.stringify(payload), env, encoding: 'utf8' }).stdout;
+    };
+
+    it('runs the cli path the server recorded, without npx', () => {
+        fs.writeFileSync(state('cli.json'), JSON.stringify({ version: '9.9.9', path: fakeCli }));
+        expect(recall()).toContain(`FAKE recall ${projectName}`);
+    });
+
+    it('shows the cli error instead of failing silently', () => {
+        const failing = path.join(plugin, 'failing-cli.js');
+        fs.writeFileSync(failing, 'process.stderr.write("noise\\nconnect ECONNREFUSED 127.0.0.1:1\\n"); process.exit(1)');
+        fs.writeFileSync(state('cli.json'), JSON.stringify({ version: '9.9.9', path: failing }));
+        expect(recall()).toContain('PAM recall failed: connect ECONNREFUSED 127.0.0.1:1');
+    });
+
+    it('ignores a recorded cli from another version', () => {
+        fs.writeFileSync(state('cli.json'), JSON.stringify({ version: '1.0.0', path: fakeCli }));
+        expect(recall()).not.toContain('FAKE');
+    });
+});
